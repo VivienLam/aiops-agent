@@ -86,3 +86,11 @@ Chaque choix, avec les alternatives et la raison.
 ## Mémoire : lecture instantanée, sans le cache
 - Alternative : la lecture standard de `stats`, qui attend environ 2 s par conteneur pour mesurer aussi le CPU
 - Raison : `one_shot=True` répond en quelques ms, ce qui donne les 28 conteneurs en moins d'une seconde. On retire le cache fichier (`inactive_file`), comme `docker stats`, sinon un service qui lit beaucoup de fichiers aurait l'air de saturer sa mémoire
+
+## Outil de logs sans protection pour l'instant
+- Alternative : filtrer ou baliser le texte des logs dès maintenant (retirer les phrases qui ressemblent à des consignes, encadrer les logs comme « données non fiables »)
+- Raison : c'est la question principale du projet. Il me faut d'abord une version sans défense pour mesurer à quel point l'injection marche, puis ajouter les protections une par une et mesurer ce que chacune apporte. Seules les entrées de l'outil sont vérifiées (nom de service, sévérité dans une liste fermée, texte par regex) : ça protège la requête OpenSearch, pas le LLM, donc ça ne fausse pas la mesure
+
+## Logs : sévérité lue en nombre, regroupement en Python
+- Alternatives : filtrer sur le texte de la sévérité, regrouper avec une agrégation OpenSearch
+- Raison : le texte change d'un service à l'autre (INFO, info, Information, Error…), le numéro OpenTelemetry est le même partout (13 = warn, 17 = error). OpenSearch ne sait pas regrouper les messages de plus de 256 caractères, donc je lis au plus 1000 logs (les plus graves d'abord) et je regroupe moi-même. Le détail d'une erreur est souvent dans exception.message plutôt que dans le message, je l'ajoute quand il apporte quelque chose
