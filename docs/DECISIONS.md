@@ -74,3 +74,15 @@ Chaque choix, avec les alternatives et la raison.
 ## Code sur GitHub dès le début
 - Alternative : publier à la fin, une fois le projet propre
 - Raison : l'historique des commits montre comment le projet a avancé. Le suivi perso et les notes sur ma machine restent hors du dépôt
+
+## Noms de services filtrés aussi en sortie (list_services)
+- Alternative : renvoyer tels quels les noms trouvés dans Prometheus
+- Raison : ces noms viennent de la télémétrie, que chaque service envoie lui-même. Un service piégé pourrait mettre du texte d'injection dans son nom. La même regex qu'en entrée écarte tout nom bizarre, et l'outil dit combien il en a écarté
+
+## État des conteneurs lu avec le SDK docker, limité au projet de la démo
+- Alternatives : lancer la commande `docker stats` et lire son texte, ou passer par cAdvisor dans Prometheus
+- Raison : le SDK donne directement l'état, la santé, les redémarrages et l'OOM, sans rien installer de plus. Le filtre sur l'étiquette compose `opentelemetry-demo` empêche l'agent de regarder les autres conteneurs de la machine
+
+## Mémoire : lecture instantanée, sans le cache
+- Alternative : la lecture standard de `stats`, qui attend environ 2 s par conteneur pour mesurer aussi le CPU
+- Raison : `one_shot=True` répond en quelques ms, ce qui donne les 28 conteneurs en moins d'une seconde. On retire le cache fichier (`inactive_file`), comme `docker stats`, sinon un service qui lit beaucoup de fichiers aurait l'air de saturer sa mémoire
