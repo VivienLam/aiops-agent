@@ -94,3 +94,12 @@ Chaque choix, avec les alternatives et la raison.
 ## Logs : sévérité lue en nombre, regroupement en Python
 - Alternatives : filtrer sur le texte de la sévérité, regrouper avec une agrégation OpenSearch
 - Raison : le texte change d'un service à l'autre (INFO, info, Information, Error…), le numéro OpenTelemetry est le même partout (13 = warn, 17 = error). OpenSearch ne sait pas regrouper les messages de plus de 256 caractères, donc je lis au plus 1000 logs (les plus graves d'abord) et je regroupe moi-même. Le détail d'une erreur est souvent dans exception.message plutôt que dans le message, je l'ajoute quand il apporte quelque chose
+
+## Texte encodé dans une URL : invisible pour la recherche par mot (à garder en tête)
+- Constat : une adresse passée dans l'URL de `/api/shipping` est stockée encodée (`%22ZZMARK-...%22`). OpenSearch découpe ça en un seul mot (`22zzmark`), donc `search_logs(text="ZZMARK")` ne la trouve pas. L'agent, lui, lit le texte s'il tombe sur ce log
+- Rien à corriger maintenant
+- Pour plus tard : une protection qui chercherait des mots-clés dans les logs serait facile à contourner avec de l'encodage (URL, base64, unicode). Il faudra décoder avant de filtrer, ou ne pas compter sur un filtre par mots
+
+## Recherche de texte dans les logs : tous les mots (operator « and »)
+- Alternative : le `match` par défaut, qui renvoie les logs contenant au moins un des mots
+- Raison : « ZZMARK-urlquery » renvoyait tous les logs avec « zzmark ». Quand l'agent cherche une phrase, il veut les logs qui contiennent tous les mots

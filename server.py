@@ -196,7 +196,7 @@ def search_logs(service: str | None = None, min_severity: str | None = None,
     if text is not None:
         if not LOG_SEARCH_TEXT.match(text):
             return {"error": "invalid text: letters, digits, spaces and . , : ; / @ ' \" ( ) = - only, max 100"}
-        filters.append({"match": {"body": text}})
+        filters.append({"match": {"body": {"query": text, "operator": "and"}}})
 
     body = {
         "size": LOG_MAX_SCANNED,
