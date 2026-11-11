@@ -1,6 +1,7 @@
 import math
 import logging
 import re
+from datetime import datetime, timedelta, timezone
 
 import docker
 import httpx
@@ -20,6 +21,18 @@ LOG_MAX_MINUTES = 60
 LOG_SEARCH_TEXT = re.compile(r"^[\w .,:;/@'\"()=-]{1,100}$")
 # OpenTelemetry severity numbers: each level starts at these values.
 SEVERITY_MIN = {"debug": 5, "info": 9, "warn": 13, "error": 17, "fatal": 21}
+
+# Jaeger tools limits
+JAEGER_URL = "http://localhost:8080/jaeger/ui/api/v3"
+TRACE_MAX_RESULTS = 10
+TRACE_SEARCH_DEPTH = 50  # traces fetched from Jaeger before sorting
+TRACE_MAX_MINUTES = 60
+TRACE_MAX_TREE_LINES = 40
+TRACE_MIN_SHOWN_FRACTION = 0.05  # off-path spans shorter than 5% of the trace are hidden
+TRACE_MAX_ATTR_CHARS = 200
+TRACE_ID = re.compile(r"^[0-9a-f]{16,32}$")
+STATUS_ERROR = 2  # OTLP status code
+NO_MESSAGE = "error (no message)"
 
 mcp = MCPServer("aiops-observability")
 logging.getLogger("httpx").setLevel(logging.WARNING)
@@ -274,6 +287,267 @@ def get_service_health(service: str, minutes: int = 5) -> dict:
         "error_rate_percent": round(100 * err_rps / rps, 1),
         "p95_latency_ms": None if p95 is None else round(p95),
     }
+
+
+def otlp_value(value: dict):
+    """Unwrap an OTLP attribute value ({"stringValue": "x"} -> "x")."""
+    return next(iter(value.values()), None) if value else None
+
+
+def cut(text, limit: int = TRACE_MAX_ATTR_CHARS) -> str:
+    text = str(text)
+    return text if len(text) <= limit else text[:limit] + "..."
+
+
+def parse_spans(otlp: dict) -> dict[str, list[dict]]:
+    """Flatten Jaeger's OTLP JSON into {trace_id: [span, ...]} with simple fields."""
+    traces: dict[str, list[dict]] = {}
+    for rs in otlp.get("result", {}).get("resourceSpans", []):
+        res = {a["key"]: otlp_value(a["value"]) for a in rs.get("resource", {}).get("attributes", [])}
+        service = res.get("service.name", "unknown")
+        for ss in rs.get("scopeSpans", []):
+            for sp in ss.get("spans", []):
+                attrs = {a["key"]: otlp_value(a["value"]) for a in sp.get("attributes", [])}
+                status = sp.get("status", {})
+                error = None
+                if status.get("code") in (STATUS_ERROR, "STATUS_CODE_ERROR"):
+                    error = status.get("message") or ""
+                    for ev in sp.get("events", []):
+                        if ev.get("name") == "exception":
+                            ev_attrs = {a["key"]: otlp_value(a["value"]) for a in ev.get("attributes", [])}
+                            error = ev_attrs.get("exception.message") or error
+                    error = cut(error) if error else NO_MESSAGE
+                traces.setdefault(sp["traceId"], []).append({
+                    "id": sp["spanId"],
+                    "parent": sp.get("parentSpanId") or None,
+                    "service": service,
+                    "name": sp["name"],
+                    "start": int(sp["startTimeUnixNano"]),
+                    "end": int(sp["endTimeUnixNano"]),
+                    "error": error,
+                    "url": attrs.get("http.route") or attrs.get("url.path")
+                           or attrs.get("http.target") or attrs.get("http.url"),
+                })
+    return traces
+
+
+def ms(nanos: int) -> float:
+    value = nanos / 1e6
+    return round(value, 1) if value < 10 else round(value)
+
+
+def find_roots(spans: list[dict]) -> list[dict]:
+    """Spans without a parent in this trace (several if the trace is incomplete)."""
+    ids = {s["id"] for s in spans}
+    return sorted((s for s in spans if s["parent"] not in ids), key=lambda s: s["start"])
+
+
+def endpoint(span: dict) -> str:
+    label = f'{span["service"]} → {span["name"]}'
+    if span["url"] and span["url"] not in span["name"]:
+        label += f' ({cut(span["url"], 100)})'
+    return label
+
+
+@mcp.tool()
+def find_traces(service: str, minutes: int = 15, only_errors: bool = False,
+                min_duration_ms: int = 0) -> dict:
+    """Find recent traces that go through a service, slowest first (max 10).
+
+    Options: only_errors keeps traces where this service has an error span,
+    min_duration_ms keeps slow ones. Each trace gives its id, root endpoint,
+    total duration, span count, services crossed and error spans with their
+    message. Use get_trace with an id to see the call tree.
+    """
+    if not SERVICE_NAME.match(service):
+        return {"error": f"invalid service name: {service!r}"}
+    minutes = max(1, min(minutes, TRACE_MAX_MINUTES))
+    min_duration_ms = max(0, min(min_duration_ms, 600_000))
+    now = datetime.now(timezone.utc)
+    params = {
+        "query.service_name": service,
+        "query.start_time_min": (now - timedelta(minutes=minutes)).isoformat(),
+        "query.start_time_max": now.isoformat(),
+        "query.search_depth": TRACE_SEARCH_DEPTH,
+    }
+    if min_duration_ms:
+        params["query.duration_min"] = f"{min_duration_ms}ms"
+    if only_errors:
+        params["query.attributes"] = '{"error":"true"}'
+    resp = httpx.get(f"{JAEGER_URL}/traces", params=params, timeout=20)
+    if resp.status_code == 404:  # Jaeger answers 404 when nothing matches
+        return {"service": service, "window_minutes": minutes, "traces": []}
+    resp.raise_for_status()
+
+    summaries = []
+    for trace_id, spans in parse_spans(resp.json()).items():
+        start = min(s["start"] for s in spans)
+        end = max(s["end"] for s in spans)
+        summaries.append({
+            "trace_id": trace_id,
+            "root": endpoint(find_roots(spans)[0]),
+            "duration_ms": ms(end - start),
+            "spans": len(spans),
+            "services": sorted({s["service"] for s in spans}),
+            # Spans with a real message first, then the ones without.
+            "errors": [f'{s["service"]} → {s["name"]}: {s["error"]}'
+                       for s in sorted((s for s in spans if s["error"]),
+                                       key=lambda s: s["error"] == NO_MESSAGE)][:5],
+        })
+    summaries.sort(key=lambda t: -t["duration_ms"])
+    return {
+        "service": service,
+        "window_minutes": minutes,
+        "traces_found": len(summaries),
+        "traces": summaries[:TRACE_MAX_RESULTS],
+    }
+
+
+def critical_path(span: dict, children: dict[str, list[dict]], until: int,
+                  self_time: dict[str, int]) -> None:
+    """Walk back from the end of `span`: the child that ends last is what the
+    parent was waiting for. Fills self_time[span_id] = time spent in the span itself."""
+    t = min(span["end"], until)
+    own = 0
+    # Children are clamped to the parent's end (clock skew between services).
+    kids = sorted(children.get(span["id"], []),
+                  key=lambda c: min(c["end"], span["end"]), reverse=True)
+    for child in kids:
+        child_end = min(child["end"], span["end"])
+        if child_end > t or child["start"] >= t:
+            continue  # runs in parallel with the path already found
+        own += t - child_end  # gap where the parent waited for no child
+        critical_path(child, children, child_end, self_time)
+        t = max(child["start"], span["start"])
+        if t <= span["start"]:
+            break
+    own += max(0, t - span["start"])
+    self_time[span["id"]] = own
+
+
+@mcp.tool()
+def get_trace(trace_id: str) -> dict:
+    """Call tree of one trace: service → operation, duration, error.
+
+    Spans marked * are on the critical path (what the total duration waits for).
+    A long span that only waits for a child is not slow itself: look at
+    "slowest_on_critical_path", the spans whose own time explains the duration.
+    """
+    if not TRACE_ID.match(trace_id):
+        return {"error": "invalid trace_id: hexadecimal only, 16 to 32 characters"}
+    resp = httpx.get(f"{JAEGER_URL}/traces/{trace_id}", timeout=20)
+    if resp.status_code == 404:
+        return {"error": f"trace {trace_id} not found"}
+    resp.raise_for_status()
+    spans = parse_spans(resp.json()).get(trace_id)
+    if not spans:
+        return {"error": f"trace {trace_id} not found"}
+
+    children: dict[str, list[dict]] = {}
+    for s in spans:
+        if s["parent"]:
+            children.setdefault(s["parent"], []).append(s)
+    roots = find_roots(spans)
+    self_time: dict[str, int] = {}
+    for root in roots:
+        critical_path(root, children, root["end"], self_time)
+
+    start = min(s["start"] for s in spans)
+    end = max(s["end"] for s in spans)
+    min_shown = (end - start) * TRACE_MIN_SHOWN_FRACTION
+
+    # A span is shown if it is in error, long enough, or has a shown descendant.
+    shown: dict[str, bool] = {}
+
+    def is_shown(s: dict) -> bool:
+        if s["id"] not in shown:
+            kids = [is_shown(k) for k in children.get(s["id"], [])]  # visit all
+            shown[s["id"]] = (bool(s["error"]) or s["end"] - s["start"] >= min_shown
+                              or any(kids))
+        return shown[s["id"]]
+
+    def child_groups(group: list[dict]) -> list[list[dict]]:
+        """Children with identical siblings (same service and operation) merged.
+        A group is kept if one span is shown or if together they are long enough."""
+        return [g for g in all_child_groups(group) if keep_group(g)]
+
+    def all_child_groups(group: list[dict]) -> list[list[dict]]:
+        groups: dict[tuple, list[dict]] = {}
+        kids = [k for s in group for k in children.get(s["id"], [])]
+        for k in sorted(kids, key=lambda k: k["start"]):
+            groups.setdefault((k["service"], k["name"]), []).append(k)
+        return list(groups.values())
+
+    def keep_group(g: list[dict]) -> bool:
+        return (any(is_shown(k) for k in g)
+                or sum(k["end"] - k["start"] for k in g) >= min_shown)
+
+    def hidden_calls(group: list[dict]) -> str:
+        """Other services called by hidden children, so a hop is never lost."""
+        calls = {}
+        for g in all_child_groups(group):
+            if not keep_group(g) and g[0]["service"] != group[0]["service"]:
+                d = max(k["end"] - k["start"] for k in g)
+                calls[g[0]["service"]] = max(calls.get(g[0]["service"], 0), d)
+        return ", ".join(f"{svc} {ms(d)} ms" for svc, d in list(calls.items())[:3])
+
+    lines: list[str] = []
+    hidden_lines = 0
+    rendered = 0
+
+    def render(group: list[dict], depth: int) -> None:
+        nonlocal hidden_lines, rendered
+        rendered += len(group)
+        first = group[0]
+        names = [first["name"]]
+        on_path = any(s["id"] in self_time for s in group)
+        errors = [s["error"] for s in group if s["error"]]
+        dur = max(s["end"] - s["start"] for s in group)
+        kids = child_groups(group)
+        # Same-service pass-through spans (only child, ~same duration) go on one line.
+        while (len(group) == 1 and len(kids) == 1 and len(kids[0]) == 1
+               and kids[0][0]["service"] == first["service"]
+               and kids[0][0]["end"] - kids[0][0]["start"] >= 0.9 * dur):
+            group = kids[0]
+            rendered += 1
+            names.append(group[0]["name"])
+            errors += [group[0]["error"]] if group[0]["error"] else []
+            kids = child_groups(group)
+        line = f'{"  " * depth}{"*" if on_path else "-"} {first["service"]} → {" › ".join(names)}'
+        line += f" ×{len(group)} (max {ms(dur)} ms)" if len(group) > 1 else f" {ms(dur)} ms"
+        calls = hidden_calls(group)
+        if calls:
+            line += f" [calls {calls}]"
+        if errors:
+            line += f" ERR: {max(errors, key=lambda e: e != NO_MESSAGE)}"
+        if len(lines) >= TRACE_MAX_TREE_LINES:
+            hidden_lines += 1
+        else:
+            lines.append(line)
+        for g in kids:
+            render(g, depth + 1)
+
+    for root in roots:
+        render([root], 0)
+
+    by_id = {s["id"]: s for s in spans}
+    slowest = sorted(self_time.items(), key=lambda kv: -kv[1])[:3]
+    result = {
+        "trace_id": trace_id,
+        "duration_ms": ms(end - start),
+        "spans": len(spans),
+        "slowest_on_critical_path": [
+            f'{by_id[i]["service"]} → {by_id[i]["name"]}: {ms(t)} ms of its own time'
+            for i, t in slowest if t > 0
+        ],
+        "tree": "\n".join(lines),
+        "short_spans_hidden": len(spans) - rendered,
+    }
+    if hidden_lines:
+        result["tree"] += f"\n... {hidden_lines} more lines not shown"
+    if len(roots) > 1:
+        result["note"] = f"{len(roots)} root spans: some parent spans are missing"
+    return result
 
 
 if __name__ == "__main__":

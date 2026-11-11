@@ -103,3 +103,19 @@ Chaque choix, avec les alternatives et la raison.
 ## Recherche de texte dans les logs : tous les mots (operator « and »)
 - Alternative : le `match` par défaut, qui renvoie les logs contenant au moins un des mots
 - Raison : « ZZMARK-urlquery » renvoyait tous les logs avec « zzmark ». Quand l'agent cherche une phrase, il veut les logs qui contiennent tous les mots
+
+## Outils de traces (find_traces, get_trace) sans protection pour l'instant
+- Alternative : filtrer les messages d'erreur et les noms de spans
+- Raison : même règle que pour search_logs. Les messages d'exception contiennent du texte venu des visiteurs (voir ATTACK_SURFACE.md), je veux mesurer l'effet de l'injection avant d'ajouter des défenses. Seules les entrées sont vérifiées : nom de service par regex, trace_id en hexadécimal (16 à 32 caractères)
+
+## Chemin critique et « temps propre » dans get_trace
+- Alternative : donner l'arbre avec les durées et laisser le LLM conclure
+- Raison : dans une trace, le proxy, le frontend et checkout ont tous une barre longue quand shipping est lent, parce qu'ils l'attendent. Un LLM risque d'accuser le premier span long qu'il voit. Comme dans l'interface de Jaeger, je pars de la fin du span racine et je remonte en suivant l'enfant qui finit le plus tard : c'est ce que le parent attendait. Le temps propre d'un span, c'est la part de sa durée où il n'attend aucun enfant du chemin. Testé avec intlShippingSlowdown : 5,4 s au total, et l'outil désigne shipping /ship-order avec 5 s de temps propre
+
+## Arbre de trace compact
+- Alternative : un span par ligne (125 lignes pour une commande, 5 000 caractères)
+- Raison : sorties courtes. Trois règles : les spans identiques côte à côte sont regroupés (×3) ; un span qui ne fait que passer la main à un seul enfant du même service tient sur la même ligne ; les spans de moins de 5 % de la durée totale sont cachés, sauf en erreur. Un appel caché vers un autre service reste signalé (« calls shipping 9 ms ») pour que l'agent ne perde jamais un passage d'un service à l'autre. Une commande passe à environ 1 000 caractères
+
+## Test automatique : tous les outils sont exposés
+- Alternative : vérifier à la main
+- Raison : j'ai déjà perdu un décorateur @mcp.tool() en modifiant server.py. La fonction marchait quand on l'appelait directement, mais l'agent ne la voyait plus. Le test démarre le serveur comme un vrai client MCP et compare la liste exacte des outils. Vérifié : il échoue si on retire un décorateur
