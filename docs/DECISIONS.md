@@ -119,3 +119,15 @@ Chaque choix, avec les alternatives et la raison.
 ## Test automatique : tous les outils sont exposés
 - Alternative : vérifier à la main
 - Raison : j'ai déjà perdu un décorateur @mcp.tool() en modifiant server.py. La fonction marchait quand on l'appelait directement, mais l'agent ne la voyait plus. Le test démarre le serveur comme un vrai client MCP et compare la liste exacte des outils. Vérifié : il échoue si on retire un décorateur
+
+## LLM pour le développement : Gemini, offre gratuite
+- Alternatives : Groq, Mistral
+- Raison : Groq a un plafond de tokens par minute trop bas pour un agent, qui renvoie tout l'historique de la conversation à chaque tour. Gemini gratuit suffit pour développer. Modèle pris : gemini-3.6-flash, le plus récent qui a appelé un outil de test (3.7 et 3.8 répondaient « surchargé », la série 4 a un quota gratuit à 0). Le modèle payant à version figée, qui servira pour les chiffres, sera choisi à l'étape 3, une fois le coût d'un diagnostic mesuré. À surveiller : sur une question d'une phrase, 462 des 500 tokens de sortie étaient du raisonnement, et ils se paient comme de la sortie
+
+## Modèle choisi par la config avec init_chat_model, sans LiteLLM
+- Alternative : LiteLLM (l'idée reprise de l'agent de la démo, voir « Serveur MCP »)
+- Raison : une couche de moins, même résultat. Le nom du modèle est dans AGENT_MODEL (.env) et `init_chat_model` de LangChain charge le bon fournisseur. Le fournisseur est donné en clair (`google_genai`), sinon LangChain peut deviner Vertex AI à cause du préfixe « gemini »
+
+## Pont MCP écrit à la main (pas langchain-mcp-adapters)
+- Alternatives : langchain-mcp-adapters, ou repasser mcp en 1.x
+- Raison : langchain-mcp-adapters 0.3.1 demande `mcp>=1.24.0` sans limite haute, donc il s'installe à côté de mcp 2.3.0, mais il plante dès l'import : il cherche `RequestContext` dans `mcp.shared.context`, qui n'existe plus en v2. Je ne rétrograde pas mcp (voir « SDK MCP officiel, version 2 »). langchain 1.5.0, langgraph 1.2.20 et langchain-google-genai 4.5.0 s'installent sans problème avec mcp 2.3.0, et les tests passent toujours. À revérifier quand une version de l'adaptateur compatible v2 sortira
