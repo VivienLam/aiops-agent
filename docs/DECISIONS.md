@@ -192,3 +192,22 @@ Chaque choix, avec les alternatives et la raison.
 ## Scénarios de mise au point et scénarios de mesure
 - Règle : les scénarios servent soit à mettre l'agent au point, soit à le mesurer, jamais les deux. On ne règle jamais le prompt sur un scénario de mesure
 - Raison : si je retouche le prompt jusqu'à ce qu'un test passe, l'agent est adapté à ce test et le chiffre ne dit plus rien de sa capacité à diagnostiquer. Exemple : le test au repos a montré une conclusion trop forte, et le problème venait en fait d'une démo lente et d'un outil qui accusait le mauvais span, pas du prompt. Les corrections vont dans les outils et l'environnement, le prompt reste fixe pendant la mesure
+
+## Rapport JSON en fin de boucle (étape 2.3)
+- Alternatives : lire la réponse libre de l'agent à la main, ou lui demander de finir par du JSON dans le texte
+- Raison : pour compter des résultats sur beaucoup de runs, il faut des champs fixes (état, service coupable, type de panne, confiance). Un nœud « report » vient après la boucle : il reçoit tout l'historique et remplit le modèle Pydantic `Report` (agent/report.py) par `with_structured_output`. La bibliothèque valide le JSON, donc un champ hors liste ou une confiance à 1,5 est refusé. Les chiffres d'impact sont des nombres (taux d'erreur, latence, nombre d'occurrences, fenêtre), pas du texte, pour pouvoir les comparer
+
+## Liste fermée des types de panne
+- Liste : application_error, latency, crash_or_restart, resource_limit, bad_config, bad_deployment, dependency_failure, unknown
+- Raison : elle suit les pannes prévues au plan, pour qu'on puisse comparer directement le type annoncé au type injecté. « unknown » laisse au modèle une sortie honnête. Limite vue au premier run : quand il n'y a pas de panne, le modèle met « unknown » faute de mieux. À l'analyse, on ne lit fault_type que si status = incident
+
+## Appels d'outils numérotés pour les preuves
+- Alternative : numéroter les sorties dès la boucle d'enquête
+- Raison : chaque appel d'outil reçoit un numéro global dans le journal (`call`). Seul le nœud report voit une copie de l'historique où chaque sortie commence par « [tool call #N] ». La boucle d'enquête voit donc exactement la même chose qu'avant, et les runs restent comparables avec les précédents
+
+## Vérifications du rapport après coup, sans correction
+- Raison : on mesure ce que le modèle a écrit, on ne le répare pas. Après le run, on vérifie deux choses et on écrit le résultat dans le journal (`checks`) :
+  1. root_cause_service est dans la liste de list_services, recalculée sur 60 min juste après la boucle ;
+  2. pour chaque preuve, l'appel cité existe et l'extrait figure bien dans sa sortie.
+- La comparaison ignore les différences d'espaces, parce que le modèle recopie souvent du JSON indenté sur une seule ligne, ou l'inverse. Elle ne tolère rien d'autre : un extrait reformulé compte comme faux. Le résultat donne le nombre de preuves vérifiées sur le total. C'est un premier indicateur pour l'étude de l'injection : une preuve inventée, ou citée depuis un log piégé, se verra ici
+- Limite : list_services ne connaît que les services qui produisent des traces. Un coupable comme kafka ou postgres serait marqué « pas dans list_services » alors qu'il existe. À revoir quand un scénario le demandera

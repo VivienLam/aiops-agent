@@ -1,4 +1,4 @@
-"""Hand-written agent loop: an llm node, a tools node, one conditional edge."""
+"""Hand-written agent loop: an llm node, a tools node, then a report node."""
 
 import asyncio
 import json
@@ -14,6 +14,8 @@ from langchain_core.messages import AnyMessage, HumanMessage, SystemMessage, Too
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.message import add_messages
 
+from agent.report import Report
+
 MAX_TOOL_CALLS = 15
 RUNS_DIR = Path(__file__).resolve().parent.parent / "runs"
 
@@ -28,6 +30,12 @@ You have at most {max_calls} tool calls."""
 BUDGET_EXHAUSTED = (
     "Tool budget exhausted. Do not call any more tools. "
     "Conclude now with what you have, and say what you could not check."
+)
+
+REPORT_REQUEST = (
+    "Investigation is over. Fill in the final report from what the tools returned above. "
+    "Each tool output starts with [tool call #N]. In evidence, give N as step and copy a short "
+    "excerpt exactly as it appears in that output. Leave a number null if you did not observe it."
 )
 
 MAX_RETRIES = 3
@@ -57,6 +65,7 @@ def retry_wait(error: Exception) -> float | None:
 class State(TypedDict):
     messages: Annotated[list[AnyMessage], add_messages]
     tool_calls: int
+    report: Report | None
 
 
 class RunLog:
@@ -70,33 +79,41 @@ class RunLog:
         self.steps: list[dict] = []
         self.waits: list[dict] = []
         self.answer = ""
+        self.report: dict | None = None
+        self.checks: dict = {}
         self.error = ""
+        self.n_calls = 0
 
     def wait(self, seconds: float, reason: str) -> None:
         self.waits.append({"before_step": len(self.steps) + 1, "seconds": round(seconds, 1),
                            "reason": reason})
         print(f"     .. waiting {seconds:.0f}s ({reason})", flush=True)
 
-    def llm_turn(self, message) -> None:
+    def llm_turn(self, message, node: str = "llm") -> None:
         usage = message.usage_metadata or {}
         details = usage.get("output_token_details") or {}
         step = {
             "step": len(self.steps) + 1,
+            "node": node,
             "input_tokens": usage.get("input_tokens", 0),
             "output_tokens": usage.get("output_tokens", 0),
             "reasoning_tokens": details.get("reasoning", 0),
             "tool_calls": [],
         }
         self.steps.append(step)
-        print(f"[{step['step']}] llm  in={step['input_tokens']} out={step['output_tokens']} "
+        print(f"[{step['step']}] {node}  in={step['input_tokens']} out={step['output_tokens']} "
               f"(reasoning={step['reasoning_tokens']})", flush=True)
 
     def tool_call(self, name: str, args: dict, output: str, executed: bool = True) -> None:
         # Full output, never cut: the injection study needs the exact text the LLM read.
-        self.steps[-1]["tool_calls"].append({"tool": name, "args": args, "executed": executed,
+        self.n_calls += 1  # global number, the one the report cites as evidence step
+        self.steps[-1]["tool_calls"].append({"call": self.n_calls, "tool": name, "args": args, "executed": executed,
                                              "output_chars": len(output), "output": output})
         mark = "" if executed else "  (skipped, budget reached)"
-        print(f"     -> {name}({json.dumps(args)}) {len(output)} chars{mark}", flush=True)
+        print(f"     -> #{self.n_calls} {name}({json.dumps(args)}) {len(output)} chars{mark}", flush=True)
+
+    def calls(self) -> list[dict]:
+        return [c for s in self.steps for c in s["tool_calls"]]
 
     def totals(self) -> dict:
         duration = time.monotonic() - self.started
@@ -123,6 +140,8 @@ class RunLog:
             "waits": self.waits,
             "totals": self.totals(),
             "answer": self.answer,
+            "report": self.report,
+            "checks": self.checks,
             "error": self.error,
         }
         path.write_text(json.dumps(data, indent=2, ensure_ascii=False))
@@ -185,15 +204,33 @@ def build_graph(llm, tools, log: RunLog):
             results.append(ToolMessage(content=output, tool_call_id=call["id"], name=call["name"]))
         return {"messages": results, "tool_calls": used}
 
+    structured = llm.with_structured_output(Report, include_raw=True)
+
+    async def report_node(state: State):
+        # A numbered copy of the history: the loop itself saw the outputs unnumbered.
+        messages, n = [], 0
+        for m in state["messages"]:
+            if isinstance(m, ToolMessage):
+                n += 1
+                m = m.model_copy(update={"content": f"[tool call #{n}]\n{m.content}"})
+            messages.append(m)
+        out = await invoke_with_retry(structured, messages + [HumanMessage(REPORT_REQUEST)], log)
+        log.llm_turn(out["raw"], node="report")
+        if out["parsing_error"]:
+            log.error = f"report not parsed: {out['parsing_error']}"
+        return {"report": out["parsed"]}
+
     def route(state: State):
-        return "tools" if state["messages"][-1].tool_calls else END
+        return "tools" if state["messages"][-1].tool_calls else "report"
 
     graph = StateGraph(State)
     graph.add_node("llm", llm_node)
     graph.add_node("tools", tools_node)
+    graph.add_node("report", report_node)
     graph.add_edge(START, "llm")
-    graph.add_conditional_edges("llm", route, ["tools", END])
+    graph.add_conditional_edges("llm", route, ["tools", "report"])
     graph.add_edge("tools", "llm")
+    graph.add_edge("report", END)
     return graph.compile()
 
 
@@ -202,4 +239,5 @@ def initial_state(question: str) -> State:
         "messages": [SystemMessage(SYSTEM_PROMPT.format(max_calls=MAX_TOOL_CALLS)),
                      HumanMessage(question)],
         "tool_calls": 0,
+        "report": None,
     }

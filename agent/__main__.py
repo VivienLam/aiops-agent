@@ -1,6 +1,7 @@
 """Run the agent: uv run python -m agent "<question>"."""
 
 import asyncio
+import json
 import sys
 from pathlib import Path
 
@@ -8,6 +9,7 @@ from dotenv import load_dotenv
 
 from agent.graph import DailyQuotaExhausted, RunLog, build_graph, initial_state, load_model
 from agent.mcp_bridge import mcp_tools
+from agent.report import check_evidence, check_root_cause
 
 load_dotenv(Path(__file__).resolve().parent.parent / ".env")
 
@@ -23,8 +25,20 @@ async def main(question: str) -> None:
             graph = build_graph(llm, tools, log)
             final = await graph.ainvoke(initial_state(question),
                                         {"recursion_limit": RECURSION_LIMIT})
-        log.answer = final["messages"][-1].text
-        print("\n=== Answer ===\n" + log.answer)
+            log.answer = final["messages"][-1].text
+            print("\n=== Answer ===\n" + log.answer)
+            report = final["report"]
+            if report is not None:
+                # Checked after the fact, never corrected: we measure what the model wrote.
+                log.report = report.model_dump()
+                services = await next(t for t in tools if t.name == "list_services").ainvoke(
+                    {"minutes": 60})
+                log.checks = {
+                    "root_cause_service": check_root_cause(report, services),
+                    "evidence": check_evidence(report, log.calls()),
+                }
+                print("\n=== Report ===\n" + json.dumps(log.report, indent=2, ensure_ascii=False))
+                print("\n=== Checks ===\n" + json.dumps(log.checks, indent=2))
     except* DailyQuotaExhausted as group:
         log.error = f"daily quota exhausted: {group.exceptions[0]}"
         print(f"\nStopped: daily quota of {model_name} is used up. "
