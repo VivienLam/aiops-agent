@@ -122,7 +122,42 @@ Chaque choix, avec les alternatives et la raison.
 
 ## LLM pour le développement : Gemini, offre gratuite
 - Alternatives : Groq, Mistral
-- Raison : Groq a un plafond de tokens par minute trop bas pour un agent, qui renvoie tout l'historique de la conversation à chaque tour. Gemini gratuit suffit pour développer. Modèle pris : gemini-3.6-flash, le plus récent qui a appelé un outil de test (3.7 et 3.8 répondaient « surchargé », la série 4 a un quota gratuit à 0). Le modèle payant à version figée, qui servira pour les chiffres, sera choisi à l'étape 3, une fois le coût d'un diagnostic mesuré. À surveiller : sur une question d'une phrase, 462 des 500 tokens de sortie étaient du raisonnement, et ils se paient comme de la sortie
+- Raison : Groq a un plafond de tokens par minute trop bas pour un agent, qui renvoie tout l'historique de la conversation à chaque tour. Gemini gratuit suffit pour développer. Le modèle payant à version figée, qui servira pour les chiffres, sera choisi à l'étape 3, une fois le coût d'un diagnostic mesuré
+
+## Modèle de développement : gemini-3.5-flash-lite (et pas gemini-3.6-flash)
+- Alternatives : gemini-3.6-flash (premier choix), attendre le quota du lendemain, activer la facturation
+- Raison : gemini-3.6-flash, le plus récent qui appelait bien un outil de test, n'a que 20 requêtes par jour en gratuit. Un diagnostic en demande environ 16 (un appel au LLM par tour), donc même pas un passage complet par jour : le premier essai a été coupé au moment de conclure. gemini-3.5-flash-lite a 15 requêtes par minute et 500 par jour. Il ne fait pas de raisonnement caché (0 token de raisonnement, contre 462 sur 500 pour 3.6-flash sur une question simple), ce qui le rend moins cher mais peut-être moins prudent. (3.7 et 3.8 répondaient « surchargé », la série 4 a un quota gratuit à 0)
+
+## Limites de débit gérées par l'agent, attentes notées à part
+- Alternative : laisser la bibliothèque google-genai réessayer seule
+- Raison : elle réessaie les 429 et 503 en silence, avec des attentes de plus en plus longues. Un dépassement du quota du jour ressemblait à un agent bloqué. Maintenant elle ne fait qu'une tentative et c'est l'agent qui décide : limite par minute ou surcharge (503), il attend le délai indiqué par Google (ou 20 s) et réessaie 3 fois au plus ; limite par jour, il s'arrête tout de suite avec un message clair. Chaque attente est notée dans le journal, et la durée est donnée avec et sans attentes, pour que le banc mesure le temps réel de l'agent
+
+## Graphe de l'agent écrit à la main, pas create_agent
+- Alternative : `create_agent` de LangChain, qui fait la même boucle en une ligne
+- Raison : deux nœuds (llm, tools) et une arête conditionnelle, ça se lit en entier. Il faut aussi la main sur la boucle pour la limite de 15 appels d'outils (au-delà, le modèle est appelé avec `tool_choice="none"` et doit conclure) et pour la pause de validation avant une action, à l'étape 4
+
+## Prompt système sans nom de l'application
+- Alternative : dire au LLM quelle démo il surveille
+- Raison : le test de renommage mesure si l'agent reconnaît la démo au lieu de diagnostiquer. Si le prompt la nomme, le test ne veut plus rien dire. Le prompt ne parle pas non plus d'injection, pour ne pas mettre l'agent en alerte et fausser la mesure. Il demande une vue d'ensemble d'abord et de ne creuser que les services anormaux : sans ça, le premier essai a vérifié les services sains un par un jusqu'à épuiser son budget
+
+## Journal de chaque passage dans runs/, sorties d'outils en entier
+- Alternative : ne garder que la taille des sorties
+- Raison : pour étudier l'injection, il faut le texte exact que le LLM a lu. Sans lui, je n'ai pas pu relire ce qu'avait renvoyé search_logs(flagd) au premier essai. Les outils limitent déjà leur sortie (20 groupes de 300 caractères pour les logs, environ 1 000 pour une trace), donc le fichier reste léger. Le journal donne aussi les tokens par tour (entrée, sortie, raisonnement), les totaux et la durée : il sert au banc et au suivi des coûts. runs/ est hors du dépôt
+
+## Fuites des noms de flags
+- Question : l'agent peut-il lire le nom de la panne activée au lieu de la diagnostiquer ?
+- Constat, démo au repos (tous les flags à off), en cherchant les 20 noms dans les sorties réelles des 6 outils :
+
+| Source | Où le nom existe | Sort par nos outils ? |
+|---|---|---|
+| Logs | événements `shipping.feature_flag.evaluated`, attribut `feature_flag_key` | Non : search_logs ne renvoie que le texte, la sévérité, le service et `exception.message`. Et ces événements ont `@timestamp` à 1970, donc le filtre de temps les écarte |
+| Spans | attributs `feature_flag.key`, événements `feature_flag.evaluation` | Non : les outils de traces ne lisent ni les attributs (sauf l'URL) ni les événements (sauf `exception`) |
+| URL des spans | `/ofrep/v1/evaluate/flags/loadGeneratorFloodHomepage` (le générateur de charge interroge flagd) | Possible en théorie : find_traces met l'URL du span racine dans `root`. Jamais vu en pratique, ces traces de 30 ms ne sont pas parmi les plus lentes |
+| list_services, get_container_status | aucun | Non. Seul le service `flagd` (et la route `/flagservice/`) montre qu'un service de flags existe |
+
+- Rien ne fuit au repos. Mais quatre pannes de la démo écrivent leur propre nom dans les logs, et ce texte passe par search_logs : kafkaQueueProblems (checkout et fraud-detection), kafkaConsumerDead (fraud-detection), adManualGc (ad, en warn), productCatalogFailure (« Product Catalog Fail Feature Flag Enabled », aussi dans les erreurs des traces)
+- Conséquence : ces scénarios seront soit masqués, soit exclus, soit comptés à part. Décision prise à l'étape 3
+- Point ouvert : le filtre sur `@timestamp` cache aussi tout vrai log sans date. Je n'y touche pas, le corriger rendrait visibles les événements `feature_flag.evaluated`, donc les noms de flags
 
 ## Modèle choisi par la config avec init_chat_model, sans LiteLLM
 - Alternative : LiteLLM (l'idée reprise de l'agent de la démo, voir « Serveur MCP »)
