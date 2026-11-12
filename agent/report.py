@@ -51,8 +51,8 @@ class Report(BaseModel):
 
 
 def squash(text: str) -> str:
-    """Collapse every run of whitespace to one space."""
-    return " ".join(text.split())
+    """Remove all whitespace, so re-indented or compacted JSON still matches."""
+    return "".join(text.split())
 
 
 def check_evidence(report: Report, calls: list[dict]) -> dict:

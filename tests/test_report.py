@@ -26,6 +26,8 @@ def report(**overrides) -> Report:
         "evidence": [
             # real, with different spacing than the output
             {"step": 2, "quote": "email ERROR smtp connection refused"},
+            # real, the indented JSON copied on one line
+            {"step": 1, "quote": '{"service": "email", "requests_per_second": 0.3, "error_rate_percent": 12.5}'},
             # invented
             {"step": 1, "quote": "email is down"},
             # call that does not exist
@@ -42,6 +44,11 @@ def test_valid_report():
     r = report()
     assert r.impact.latency_ms is None
     assert r.evidence[0].step == 2
+
+
+def test_compacted_json_with_wrong_value_fails():
+    r = report(evidence=[{"step": 1, "quote": '{"service": "email", "requests_per_second": 0.4}'}])
+    assert check_evidence(r, CALLS)["verified"] == 0
 
 
 def test_no_incident_has_no_fault_type():
@@ -74,9 +81,9 @@ def test_invalid_report(field, value):
 
 def test_evidence_check():
     result = check_evidence(report(), CALLS)
-    assert (result["verified"], result["total"]) == (1, 3)
+    assert (result["verified"], result["total"]) == (2, 4)
     assert [d["reason"] for d in result["details"]] == [
-        "found", "quote not in output", "no such tool call"]
+        "found", "found", "quote not in output", "no such tool call"]
 
 
 def test_root_cause_check():
