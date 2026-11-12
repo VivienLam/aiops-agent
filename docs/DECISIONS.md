@@ -10,9 +10,9 @@ Chaque choix, avec les alternatives et la raison.
 - Alternatives : Docker Desktop, dual boot Linux
 - Raison : Docker était déjà installé dans Ubuntu et marchait. C'est plus léger que Docker Desktop, qui ajoute sa propre couche. WSL limité à 11 Go pour laisser de la place à Windows
 
-## Modifications de la démo (mémoire du catalogue, dépendance au paiement)
+## Modifications de la démo (mémoire du catalogue et de checkout, dépendance au paiement)
 - Alternative : ne rien toucher
-- Raison : sur ce PC, le catalogue manquait de mémoire et le contrôle de santé du paiement bloquait tout le démarrage. Faites dans compose.yaml pour avancer ; à sortir dans un fichier à moi pour que le projet reste reproductible
+- Raison : sur ce PC, le catalogue et checkout manquaient de mémoire, et le contrôle de santé du paiement bloquait tout le démarrage. D'abord faites dans compose.yaml pour avancer, puis sorties dans demo/compose.local.yaml (voir « Fichier compose à moi »)
 
 ## Pannes qui laissent un état à corriger
 - Alternative : utiliser seulement les feature flags de la démo
@@ -110,7 +110,7 @@ Chaque choix, avec les alternatives et la raison.
 
 ## Chemin critique et « temps propre » dans get_trace
 - Alternative : donner l'arbre avec les durées et laisser le LLM conclure
-- Raison : dans une trace, le proxy, le frontend et checkout ont tous une barre longue quand shipping est lent, parce qu'ils l'attendent. Un LLM risque d'accuser le premier span long qu'il voit. Comme dans l'interface de Jaeger, je pars de la fin du span racine et je remonte en suivant l'enfant qui finit le plus tard : c'est ce que le parent attendait. Le temps propre d'un span, c'est la part de sa durée où il n'attend aucun enfant du chemin. Testé avec intlShippingSlowdown : 5,4 s au total, et l'outil désigne shipping /ship-order avec 5 s de temps propre
+- Raison : dans une trace, le proxy, le frontend et checkout ont tous une barre longue quand shipping est lent, parce qu'ils l'attendent. Un LLM risque d'accuser le premier span long qu'il voit. Comme dans l'interface de Jaeger, je pars de la fin du span racine et je remonte en suivant l'enfant qui finit le plus tard : c'est ce que le parent attendait. Le temps propre d'un span, c'est la part de sa durée où il n'attend aucun enfant du chemin. Testé avec intlShippingSlowdown : 5,4 s au total, et l'outil désigne shipping /ship-order avec 5 s de temps propre. Calcul du temps propre revu depuis, voir « get_trace : temps propre par union des enfants »
 
 ## Arbre de trace compact
 - Alternative : un span par ligne (125 lignes pour une commande, 5 000 caractères)
@@ -166,3 +166,29 @@ Chaque choix, avec les alternatives et la raison.
 ## Pont MCP écrit à la main (pas langchain-mcp-adapters)
 - Alternatives : langchain-mcp-adapters, ou repasser mcp en 1.x
 - Raison : langchain-mcp-adapters 0.3.1 demande `mcp>=1.24.0` sans limite haute, donc il s'installe à côté de mcp 2.3.0, mais il plante dès l'import : il cherche `RequestContext` dans `mcp.shared.context`, qui n'existe plus en v2. Je ne rétrograde pas mcp (voir « SDK MCP officiel, version 2 »). langchain 1.5.0, langgraph 1.2.20 et langchain-google-genai 4.5.0 s'installent sans problème avec mcp 2.3.0, et les tests passent toujours. À revérifier quand une version de l'adaptateur compatible v2 sortira
+
+## get_trace : temps propre par union des enfants
+- Alternative : garder l'ancien calcul, fait en remontant le chemin critique
+- Raison : sur une vraie commande ratée, l'outil donnait 15 s de temps propre au frontend, qui ne faisait qu'attendre checkout. L'ancien calcul coupait chaque enfant à la fin de son parent, mais le comparait à une limite venue du grand-parent : avec 1 ou 2 ms de décalage d'horloge entre services, l'enfant était écarté comme « parallèle » et toute sa durée comptée au parent. Maintenant, le temps propre d'un span = sa durée moins l'union des intervalles de ses enfants, chacun coupé à la fenêtre du parent. Ça ne dépend plus du chemin. Le chemin critique part de la fin de chaque span et suit l'enfant qui finit le plus tard. Un enfant n'est écarté que s'il commence après le point atteint : dans une autre trace, trois appels démarraient 0,2 ms avant la fin de PlaceOrder, et l'ancienne règle (écarter s'il finit après) faisait sortir les 13 s de checkout du chemin. Testé sur une fausse trace qui reproduit les deux cas, puis revérifié avec intlShippingSlowdown : shipping /ship-order reste le coupable avec 5 s de temps propre, tout le reste sous 15 ms
+
+## get_trace : appelé qui continue après l'abandon de l'appelant
+- Raison : quand le frontend abandonne au bout de 15 s et que checkout continue jusqu'à 17 s, l'arbre l'écrit sur la ligne de l'appelé : « caller gave up after 15.0 s, callee ran 17.1 s ». C'est une information utile pour le diagnostic (un timeout côté appelant). Seuil : l'appelé finit plus de 5 % de la durée du parent après lui. En dessous, c'est du décalage d'horloge et on n'écrit rien
+
+## get_trace : la cible de l'appel fait partie du regroupement
+- Alternative : regrouper par service et nom d'opération seulement
+- Raison : checkout fait deux « POST », vers shipping et vers email. Ils étaient fusionnés en « POST ×2 [calls shipping] », et l'erreur de l'appel vers email semblait venir de shipping. La cible est lue dans les attributs du span client (peer.service, server.address, net.peer.name, sinon l'hôte de l'URL) et affichée : « POST (to email) ». Quand ce n'est qu'une adresse IP (cas des appels gRPC vers cart), on prend le service de l'enfant s'il est dans la trace
+
+## Lenteur de checkout au repos : manque de mémoire
+- Constat : au repos, checkout avait un p95 de 12 s en permanence, et quelques commandes échouaient sur un timeout vers email. Le temps se perdait dans checkout lui-même (code entre les appels, et 6 à 7 s par commande entre l'envoi d'un appel et le traitement de la réponse), alors que les services appelés répondaient en quelques ms
+- Cause : la limite de la démo, 20M, alors que checkout utilise environ 19 Mo une fois à l'aise. Le binaire fait environ 14 Mo, et ses pages comptent dans la même limite que la mémoire de travail. Linux les retirait sans arrêt de la mémoire, puis les relisait sur le disque au prochain passage dans ce code. Email n'y était pour rien : il répondait en 10 ms, mais checkout dépassait son propre délai pendant qu'il attendait le disque
+- Preuves : 1,64 To lus en 2 h 20 (121 MiB/s en continu), 39 millions de défauts de page majeurs, 10 Mo en swap, processus bloqué environ 5 % du temps par manque de mémoire (PSI)
+- Remède : limite à 100M, comme pour le catalogue. 10 min après : 0 KiB/s lu (10 MiB en tout), 57 défauts de page, p95 de 92 ms au lieu de 12 s, commande la plus lente en 235 ms, 0 timeout vers email
+- Conséquence : les deux premiers tests « au repos » ont tourné sur une démo vraiment lente. L'agent avait raison de signaler checkout ; c'est l'attendu du test qui était faux
+
+## Fichier compose à moi et scripts de démarrage
+- Alternatives : modifier compose.yaml de la démo, ou son fichier compose.extras.yaml (prévu pour ça)
+- Raison : demo/compose.local.yaml est dans mon dépôt, donc versionné avec le projet, et la démo reste identique à l'original (git status propre). Compose le charge en dernier et fusionne seulement les clés qu'il contient. scripts/start_demo.sh lance `make start` en ajoutant ce fichier par la variable DOCKER_COMPOSE_FILES_EXTRAS du Makefile ; stop_demo.sh fait pareil pour `make stop`. Vérifié : après démarrage, `docker inspect` donne bien 100M pour checkout et le catalogue. Attention, `make stop` efface les volumes (données d'OpenSearch comprises), c'est le comportement de la démo
+
+## Scénarios de mise au point et scénarios de mesure
+- Règle : les scénarios servent soit à mettre l'agent au point, soit à le mesurer, jamais les deux. On ne règle jamais le prompt sur un scénario de mesure
+- Raison : si je retouche le prompt jusqu'à ce qu'un test passe, l'agent est adapté à ce test et le chiffre ne dit plus rien de sa capacité à diagnostiquer. Exemple : le test au repos a montré une conclusion trop forte, et le problème venait en fait d'une démo lente et d'un outil qui accusait le mauvais span, pas du prompt. Les corrections vont dans les outils et l'environnement, le prompt reste fixe pendant la mesure

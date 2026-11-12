@@ -1,0 +1,19 @@
+# My changes to the OpenTelemetry Demo, kept out of its compose.yaml.
+# Loaded last by scripts/start_demo.sh; Compose merges these keys over the demo's.
+# Reasons: docs/DECISIONS.md.
+
+services:
+  checkout:
+    depends_on:
+      payment:
+        condition: service_started  # payment's healthcheck blocked the whole startup
+    deploy:
+      resources:
+        limits:
+          memory: 100M  # 20M: binary pages evicted and re-read from disk, checkout p95 ~12 s
+
+  product-catalog:
+    deploy:
+      resources:
+        limits:
+          memory: 100M  # 20M was not enough on this PC

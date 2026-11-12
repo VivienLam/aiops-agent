@@ -2,6 +2,7 @@ import math
 import logging
 import re
 from datetime import datetime, timedelta, timezone
+from urllib.parse import urlsplit
 
 import docker
 import httpx
@@ -30,6 +31,7 @@ TRACE_MAX_MINUTES = 60
 TRACE_MAX_TREE_LINES = 40
 TRACE_MIN_SHOWN_FRACTION = 0.05  # off-path spans shorter than 5% of the trace are hidden
 TRACE_MAX_ATTR_CHARS = 200
+TRACE_OVERRUN_MIN_FRACTION = 0.05  # child ending later than this past its parent: flagged
 TRACE_ID = re.compile(r"^[0-9a-f]{16,32}$")
 STATUS_ERROR = 2  # OTLP status code
 NO_MESSAGE = "error (no message)"
@@ -299,6 +301,22 @@ def cut(text, limit: int = TRACE_MAX_ATTR_CHARS) -> str:
     return text if len(text) <= limit else text[:limit] + "..."
 
 
+OUTGOING_KINDS = (3, 4, "SPAN_KIND_CLIENT", "SPAN_KIND_PRODUCER")
+IP_ADDRESS = re.compile(r"^[\d.]+$|^[0-9a-fA-F:]*:[0-9a-fA-F:]+$")
+
+
+def call_target(kind, attrs: dict) -> str | None:
+    """Service or host an outgoing span calls (client/producer spans only)."""
+    if kind not in OUTGOING_KINDS:
+        return None
+    target = attrs.get("peer.service") or attrs.get("server.address") or attrs.get("net.peer.name")
+    if not target:
+        url = attrs.get("url.full") or attrs.get("http.url")
+        if url:
+            target = urlsplit(str(url)).hostname
+    return cut(target, 60) if target else None
+
+
 def parse_spans(otlp: dict) -> dict[str, list[dict]]:
     """Flatten Jaeger's OTLP JSON into {trace_id: [span, ...]} with simple fields."""
     traces: dict[str, list[dict]] = {}
@@ -327,6 +345,7 @@ def parse_spans(otlp: dict) -> dict[str, list[dict]]:
                     "error": error,
                     "url": attrs.get("http.route") or attrs.get("url.path")
                            or attrs.get("http.target") or attrs.get("http.url"),
+                    "target": call_target(sp.get("kind"), attrs),
                 })
     return traces
 
@@ -403,26 +422,56 @@ def find_traces(service: str, minutes: int = 15, only_errors: bool = False,
     }
 
 
-def critical_path(span: dict, children: dict[str, list[dict]], until: int,
-                  self_time: dict[str, int]) -> None:
-    """Walk back from the end of `span`: the child that ends last is what the
-    parent was waiting for. Fills self_time[span_id] = time spent in the span itself."""
-    t = min(span["end"], until)
-    own = 0
-    # Children are clamped to the parent's end (clock skew between services).
-    kids = sorted(children.get(span["id"], []),
-                  key=lambda c: min(c["end"], span["end"]), reverse=True)
+def clipped(child: dict, parent: dict) -> tuple[int, int]:
+    """Child interval cut to the parent's window (a caller that gave up, or clock skew)."""
+    return max(child["start"], parent["start"]), min(child["end"], parent["end"])
+
+
+def self_time_of(span: dict, children: dict[str, list[dict]]) -> int:
+    """Span duration minus the union of its children's intervals (clipped to the span)."""
+    intervals = sorted(clipped(c, span) for c in children.get(span["id"], []))
+    covered, cur_start, cur_end = 0, None, None
+    for start, end in intervals:
+        if end <= start:
+            continue  # entirely outside the parent's window
+        if cur_end is None or start > cur_end:
+            if cur_end is not None:
+                covered += cur_end - cur_start
+            cur_start, cur_end = start, end
+        else:
+            cur_end = max(cur_end, end)
+    if cur_end is not None:
+        covered += cur_end - cur_start
+    return span["end"] - span["start"] - covered
+
+
+def critical_path(span: dict, children: dict[str, list[dict]], path: set[str]) -> None:
+    """Walk back from the end of `span`: the child that ends last (clipped to the
+    span) is what the span was waiting for. Then the same inside that child."""
+    path.add(span["id"])
+    t = span["end"]
+    kids = sorted(children.get(span["id"], []), key=lambda c: clipped(c, span)[1], reverse=True)
     for child in kids:
-        child_end = min(child["end"], span["end"])
-        if child_end > t or child["start"] >= t:
-            continue  # runs in parallel with the path already found
-        own += t - child_end  # gap where the parent waited for no child
-        critical_path(child, children, child_end, self_time)
-        t = max(child["start"], span["start"])
+        start, end = clipped(child, span)
+        # Skip a child only if it starts after the point reached: one that ends a bit
+        # later (calls overlapping by a fraction of a ms) is still what we waited for.
+        if end <= start or start >= t:
+            continue  # outside the window, or entirely after the path found
+        critical_path(child, children, path)
+        t = start
         if t <= span["start"]:
             break
-    own += max(0, t - span["start"])
-    self_time[span["id"]] = own
+
+
+def overrun_note(span: dict, parent: dict | None) -> str | None:
+    """When a callee keeps running after its caller stopped waiting."""
+    if parent is None:
+        return None
+    parent_dur = parent["end"] - parent["start"]
+    if span["end"] - parent["end"] <= TRACE_OVERRUN_MIN_FRACTION * parent_dur:
+        return None  # small differences are clock skew between services
+    return (f"caller gave up after {parent_dur / 1e9:.1f} s, "
+            f"callee ran {(span['end'] - span['start']) / 1e9:.1f} s")
 
 
 @mcp.tool()
@@ -447,10 +496,18 @@ def get_trace(trace_id: str) -> dict:
     for s in spans:
         if s["parent"]:
             children.setdefault(s["parent"], []).append(s)
+    # A bare IP as target says little: use the called service when its span is here.
+    for s in spans:
+        if s["target"] and IP_ADDRESS.match(s["target"]):
+            callee = next((k["service"] for k in children.get(s["id"], [])
+                           if k["service"] != s["service"]), None)
+            s["target"] = callee or s["target"]
     roots = find_roots(spans)
-    self_time: dict[str, int] = {}
+    by_id = {s["id"]: s for s in spans}
+    on_path: set[str] = set()
     for root in roots:
-        critical_path(root, children, root["end"], self_time)
+        critical_path(root, children, on_path)
+    self_time = {i: self_time_of(by_id[i], children) for i in on_path}
 
     start = min(s["start"] for s in spans)
     end = max(s["end"] for s in spans)
@@ -467,15 +524,15 @@ def get_trace(trace_id: str) -> dict:
         return shown[s["id"]]
 
     def child_groups(group: list[dict]) -> list[list[dict]]:
-        """Children with identical siblings (same service and operation) merged.
-        A group is kept if one span is shown or if together they are long enough."""
+        """Children with identical siblings (same service, operation and call target)
+        merged. A group is kept if one span is shown or if together they are long enough."""
         return [g for g in all_child_groups(group) if keep_group(g)]
 
     def all_child_groups(group: list[dict]) -> list[list[dict]]:
         groups: dict[tuple, list[dict]] = {}
         kids = [k for s in group for k in children.get(s["id"], [])]
         for k in sorted(kids, key=lambda k: k["start"]):
-            groups.setdefault((k["service"], k["name"]), []).append(k)
+            groups.setdefault((k["service"], k["name"], k["target"]), []).append(k)
         return list(groups.values())
 
     def keep_group(g: list[dict]) -> bool:
@@ -502,6 +559,7 @@ def get_trace(trace_id: str) -> dict:
         names = [first["name"]]
         on_path = any(s["id"] in self_time for s in group)
         errors = [s["error"] for s in group if s["error"]]
+        notes = [n for s in group if (n := overrun_note(s, by_id.get(s["parent"])))]
         dur = max(s["end"] - s["start"] for s in group)
         kids = child_groups(group)
         # Same-service pass-through spans (only child, ~same duration) go on one line.
@@ -512,9 +570,15 @@ def get_trace(trace_id: str) -> dict:
             rendered += 1
             names.append(group[0]["name"])
             errors += [group[0]["error"]] if group[0]["error"] else []
+            notes += [n for n in [overrun_note(group[0], by_id.get(group[0]["parent"]))] if n]
             kids = child_groups(group)
+        target = group[0]["target"]
         line = f'{"  " * depth}{"*" if on_path else "-"} {first["service"]} → {" › ".join(names)}'
+        if target and target != first["service"]:
+            line += f" (to {target})"
         line += f" ×{len(group)} (max {ms(dur)} ms)" if len(group) > 1 else f" {ms(dur)} ms"
+        if notes:
+            line += f" ({notes[0]})"
         calls = hidden_calls(group)
         if calls:
             line += f" [calls {calls}]"
@@ -530,14 +594,14 @@ def get_trace(trace_id: str) -> dict:
     for root in roots:
         render([root], 0)
 
-    by_id = {s["id"]: s for s in spans}
     slowest = sorted(self_time.items(), key=lambda kv: -kv[1])[:3]
     result = {
         "trace_id": trace_id,
         "duration_ms": ms(end - start),
         "spans": len(spans),
         "slowest_on_critical_path": [
-            f'{by_id[i]["service"]} → {by_id[i]["name"]}: {ms(t)} ms of its own time'
+            f'{by_id[i]["service"]} → {by_id[i]["name"]}'
+            f'{f" (to {by_id[i]["target"]})" if by_id[i]["target"] else ""}: {ms(t)} ms of its own time'
             for i, t in slowest if t > 0
         ],
         "tree": "\n".join(lines),
