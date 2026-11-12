@@ -7,38 +7,22 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
-from agent.graph import DailyQuotaExhausted, RunLog, build_graph, initial_state, load_model
-from agent.mcp_bridge import mcp_tools
-from agent.report import check_evidence, check_root_cause
+from agent.graph import DailyQuotaExhausted, RunLog, load_model
+from agent.runner import run_agent
 
 load_dotenv(Path(__file__).resolve().parent.parent / ".env")
-
-# LangGraph counts each node visit; 15 tool rounds + final answer fit easily.
-RECURSION_LIMIT = 100
 
 
 async def main(question: str) -> None:
     model_name, llm = load_model()
     log = RunLog(question, model_name)
     try:
-        async with mcp_tools() as tools:
-            graph = build_graph(llm, tools, log)
-            final = await graph.ainvoke(initial_state(question),
-                                        {"recursion_limit": RECURSION_LIMIT})
-            log.answer = final["messages"][-1].text
-            print("\n=== Answer ===\n" + log.answer)
-            report = final["report"]
-            if report is not None:
-                # Checked after the fact, never corrected: we measure what the model wrote.
-                log.report = report.model_dump()
-                services = await next(t for t in tools if t.name == "list_services").ainvoke(
-                    {"minutes": 60})
-                log.checks = {
-                    "root_cause_service": check_root_cause(report, services),
-                    "evidence": check_evidence(report, log.calls()),
-                }
-                print("\n=== Report ===\n" + json.dumps(log.report, indent=2, ensure_ascii=False))
-                print("\n=== Checks ===\n" + json.dumps(log.checks, indent=2))
+        async for _ in run_agent(question, llm, log):
+            pass  # RunLog already prints each step live
+        print("\n=== Answer ===\n" + log.answer)
+        if log.report is not None:
+            print("\n=== Report ===\n" + json.dumps(log.report, indent=2, ensure_ascii=False))
+            print("\n=== Checks ===\n" + json.dumps(log.checks, indent=2))
     except* DailyQuotaExhausted as group:
         log.error = f"daily quota exhausted: {group.exceptions[0]}"
         print(f"\nStopped: daily quota of {model_name} is used up. "

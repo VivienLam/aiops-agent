@@ -224,3 +224,18 @@ Chaque choix, avec les alternatives et la raison.
 - Effet : les 3 journaux ont été revérifiés sans relancer l'agent. On passe de 1/4, 2/4, 3/3 à 4/4, 4/4, 3/3. L'ancien résultat reste dans chaque journal sous `evidence_old_rule`
 - Risque : coller les mots pourrait faire passer un extrait qui ne diffère que par les espaces (« ab » trouvé dans « a b »). C'est jugé négligeable pour des extraits de plusieurs mots. Les tests vérifient qu'une preuve inventée, un appel inexistant et un JSON compacté avec une valeur fausse échouent toujours
 - Pour la suite : tous les passages suivants utilisent cette règle dès le départ
+
+## Interface Streamlit (étape 2.5)
+- Alternatives : rester en ligne de commande, ou une petite app web écrite à la main (FastAPI + HTML)
+- Raison : Streamlit donne une page utilisable en un seul fichier Python (app.py), sans écrire de HTML ni de JavaScript. Thème sombre dans .streamlit/config.toml. Lancement : `uv run streamlit run app.py`, puis http://localhost:8501
+
+## Streamlit lit les journaux de runs/, pas une base à part
+- Alternative : une base SQLite pour l'interface
+- Raison : une seule source de vérité. Le journal JSON écrit par chaque passage contient déjà tout (appels, sorties complètes, rapport, vérifications, totaux). La barre latérale liste runs/ et réaffiche n'importe quel passage sans relancer l'agent. Même un passage qui vient de finir est réaffiché depuis son fichier, donc ce qu'on voit à l'écran est exactement ce qui est enregistré
+
+## Un seul déroulé de passage pour la ligne de commande et l'interface
+- Raison : agent/runner.py fait tourner le graphe en mode stream (`astream`), renvoie un événement à chaque appel d'outil, puis lance les vérifications du rapport. `python -m agent` et app.py l'utilisent tous les deux, la logique n'est pas copiée. Le graphe n'a pas changé
+
+## Passage lancé dans un thread, événements par une file
+- Alternative : appeler `asyncio.run` directement dans le script Streamlit
+- Raison : première version en asyncio direct. Quand l'onglet du navigateur s'est fermé en plein passage, Streamlit a arrêté le script, et la session MCP a planté en se fermant (« cancel scope in a different task »). Le passage était perdu. Maintenant, l'agent tourne dans son propre thread avec sa propre boucle et envoie chaque appel d'outil dans une file (`queue.Queue`). Streamlit ne fait que lire la file. Le passage va au bout et enregistre son journal même si l'onglet est fermé ; vérifié, un passage a fini seul après la fermeture du navigateur
