@@ -3,7 +3,7 @@
 import json
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 FaultType = Literal[
     "application_error", "latency", "crash_or_restart", "resource_limit",
@@ -18,8 +18,10 @@ class Impact(BaseModel):
                                              description="Observed error rate, in percent")
     latency_ms: float | None = Field(None, ge=0,
                                      description="Observed latency (p95 or slowest), in ms")
-    occurrences: int | None = Field(None, ge=0,
-                                    description="Number of failing requests, errors or events seen")
+    error_count: int | None = Field(
+        None, ge=0,
+        description="Number of errors you counted. null if you did not count any; "
+                    "0 only if you counted and found zero errors")
     window_minutes: int | None = Field(None, ge=0,
                                        description="Time window the numbers above cover")
 
@@ -34,11 +36,18 @@ class Report(BaseModel):
     impact: Impact
     root_cause_service: str | None = Field(
         None, description="Service at the origin of the problem, or null")
-    fault_type: FaultType
+    fault_type: FaultType | None = Field(
+        None, description='Kind of fault. Must be null unless status is "incident"')
     confidence: float = Field(ge=0, le=1)
     evidence: list[Evidence] = Field(description="Facts from tool outputs that support the report")
     proposed_action: str = Field(description="What an operator should do next")
     missing_info: str = Field(description="What would be needed to conclude with more certainty")
+
+    @model_validator(mode="after")
+    def fault_type_only_for_incidents(self):
+        if self.status != "incident" and self.fault_type is not None:
+            raise ValueError('fault_type must be null when status is not "incident"')
+        return self
 
 
 def squash(text: str) -> str:

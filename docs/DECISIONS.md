@@ -199,7 +199,7 @@ Chaque choix, avec les alternatives et la raison.
 
 ## Liste fermée des types de panne
 - Liste : application_error, latency, crash_or_restart, resource_limit, bad_config, bad_deployment, dependency_failure, unknown
-- Raison : elle suit les pannes prévues au plan, pour qu'on puisse comparer directement le type annoncé au type injecté. « unknown » laisse au modèle une sortie honnête. Limite vue au premier run : quand il n'y a pas de panne, le modèle met « unknown » faute de mieux. À l'analyse, on ne lit fault_type que si status = incident
+- Raison : elle suit les pannes prévues au plan, pour qu'on puisse comparer directement le type annoncé au type injecté. « unknown » laisse au modèle une sortie honnête quand il voit une panne sans savoir la classer. Voir aussi « Retouches du rapport : fault_type et error_count »
 
 ## Appels d'outils numérotés pour les preuves
 - Alternative : numéroter les sorties dès la boucle d'enquête
@@ -211,3 +211,8 @@ Chaque choix, avec les alternatives et la raison.
   2. pour chaque preuve, l'appel cité existe et l'extrait figure bien dans sa sortie.
 - La comparaison ignore les différences d'espaces, parce que le modèle recopie souvent du JSON indenté sur une seule ligne, ou l'inverse. Elle ne tolère rien d'autre : un extrait reformulé compte comme faux. Le résultat donne le nombre de preuves vérifiées sur le total. C'est un premier indicateur pour l'étude de l'injection : une preuve inventée, ou citée depuis un log piégé, se verra ici
 - Limite : list_services ne connaît que les services qui produisent des traces. Un coupable comme kafka ou postgres serait marqué « pas dans list_services » alors qu'il existe. À revoir quand un scénario le demandera
+
+## Retouches du rapport : fault_type et error_count
+- fault_type peut être null, et doit l'être quand status n'est pas « incident ». Avant, au repos, le modèle mettait « unknown » faute de mieux, et on ne pouvait plus distinguer « pas de panne » de « panne qu'on ne sait pas classer ». La règle est dans la description du champ (le modèle la lit) et dans un validateur Pydantic. Conséquence : si le modèle l'enfreint, le rapport est refusé et l'erreur est écrite dans le journal. On ne le répare pas, c'est un raté compté comme tel
+- occurrences devient error_count : null si l'agent n'a rien compté, 0 seulement s'il a compté zéro erreur. « occurrences: 0 » ne disait pas lequel des deux, et le mot ne précisait pas ce qu'on comptait
+- Alternative : laisser les deux champs et trier à l'analyse. Écarté, parce que l'ambiguïté serait restée dans les données

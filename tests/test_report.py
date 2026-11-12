@@ -19,7 +19,7 @@ CALLS = [
 def report(**overrides) -> Report:
     data = {
         "status": "incident",
-        "impact": {"error_rate_percent": 12.5, "occurrences": 12, "window_minutes": 5},
+        "impact": {"error_rate_percent": 12.5, "error_count": 12, "window_minutes": 5},
         "root_cause_service": "email",
         "fault_type": "dependency_failure",
         "confidence": 0.7,
@@ -42,6 +42,22 @@ def test_valid_report():
     r = report()
     assert r.impact.latency_ms is None
     assert r.evidence[0].step == 2
+
+
+def test_no_incident_has_no_fault_type():
+    r = report(status="no_incident", fault_type=None, root_cause_service=None)
+    assert r.fault_type is None
+    with pytest.raises(ValidationError):
+        report(status="no_incident", fault_type="unknown")
+    with pytest.raises(ValidationError):
+        report(status="uncertain", fault_type="latency")
+
+
+def test_error_count_null_is_not_zero():
+    assert report(impact={}).impact.error_count is None
+    assert report(impact={"error_count": 0}).impact.error_count == 0
+    with pytest.raises(ValidationError):
+        report(impact={"error_count": -1})
 
 
 @pytest.mark.parametrize("field, value", [
