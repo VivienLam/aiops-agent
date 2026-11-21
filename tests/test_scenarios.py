@@ -120,6 +120,17 @@ def test_leaky_flag_must_be_marked(tmp_path):
     assert load_scenario(write(tmp_path, data), FLAGS).leaks_own_name
 
 
+def test_service_to_restart(tmp_path):
+    from bench.scenarios import service_to_restart
+    assert service_to_restart(load_scenario(write(tmp_path, PAYMENT), FLAGS)) == "payment"
+    docker_inj = changed(injection={"kind": "docker", "action": "crash", "service": "cart"})
+    assert service_to_restart(load_scenario(write(tmp_path, docker_inj), FLAGS)) == "cart"
+    idle = changed(injection={"kind": "none"},
+                   expected={"status": "no_incident", "root_cause_service": None,
+                             "fault_type": None, "repair": {"action": "none"}})
+    assert service_to_restart(load_scenario(write(tmp_path, idle), FLAGS)) is None
+
+
 def test_repo_scenarios_are_valid():
     """The real files in scenarios/ (flag names checked against the demo when it is there)."""
     try:

@@ -1,7 +1,9 @@
-"""Turn every fault off (git restore of the flag file), then wait until the demo is at rest.
+"""Turn every fault off, restart the service the scenario touched, then wait until the demo is at rest.
 
-Usage: uv run python scripts/reset.py [--timeout SECONDS]
-Exit code 0 once at rest, 1 if still not at rest after the timeout.
+Usage: uv run python scripts/reset.py [scenario-id or path] [--timeout SECONDS]
+Without a scenario, only the flags are restored (nothing is restarted).
+The restart clears what a fault leaves behind once its flag is off
+(memory kept by a JVM, swap). Exit code 0 once at rest, 1 otherwise.
 """
 
 import argparse
@@ -11,19 +13,29 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from bench.flags import restore_flags  # noqa: E402
+from bench.demo import restart_service  # noqa: E402
+from bench.flags import load_flags, restore_flags  # noqa: E402
 from bench.idle import SETTLE_SECONDS, check_idle, summary  # noqa: E402
+from bench.scenarios import find_scenario, load_scenario, service_to_restart  # noqa: E402
 
 POLL_SECONDS = 20
 
 
 def main() -> int:
     parser = argparse.ArgumentParser()
+    parser.add_argument("scenario", nargs="?")
     parser.add_argument("--timeout", type=int, default=600)
     args = parser.parse_args()
 
+    service = None
+    if args.scenario:
+        service = service_to_restart(load_scenario(find_scenario(args.scenario), load_flags()))
+
     restore_flags()
     print("Flag file restored, all flags back to their original value.")
+    if service:
+        restart_service(service)
+        print(f"Restarted {service}.")
 
     # Errors from before the reset can still arrive, and the error window still covers
     # the time the fault was on: "at rest" only counts once the window is all after the reset.

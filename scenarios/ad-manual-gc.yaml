@@ -1,5 +1,3 @@
-# ÉCARTÉ pour l'instant (21/11) : après le reset, ad reste à ~98 % de sa limite mémoire
-# (294/300 Mo contre ~240 avant). reset.py ne remet pas la démo au repos. Voir DECISIONS.md.
 id: ad-manual-gc
 description: ad lance un garbage collector complet à chaque requête et devient lent
 lot: eval                # compté à part : la panne écrit son nom dans les logs (warn)

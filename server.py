@@ -101,6 +101,34 @@ def list_services(minutes: int = 5) -> dict:
     return result
 
 
+CGROUP_DIR = "/sys/fs/cgroup/system.slice/docker-{id}.scope"  # cgroup v2, systemd driver
+
+
+def memory_used_bytes(mem: dict) -> int | None:
+    """Same as `docker stats`: page cache that can be freed is not counted."""
+    if "usage" not in mem:
+        return None
+    return mem["usage"] - mem.get("stats", {}).get("inactive_file", 0)
+
+
+def cgroup_memory(container_id: str) -> dict | None:
+    """Swap in use and memory-limit counters of a container, read from its cgroup files.
+
+    limit_hits: times usage reached the limit (the kernel then reclaims or swaps).
+    Counters are cumulative since the container started. None if the files are not readable.
+    """
+    base = CGROUP_DIR.format(id=container_id)
+    try:
+        with open(f"{base}/memory.swap.current") as f:
+            swap = int(f.read())
+        with open(f"{base}/memory.events") as f:
+            events = dict(line.split() for line in f if line.strip())
+    except (OSError, ValueError):
+        return None
+    return {"swap_bytes": swap, "limit_hits": int(events.get("max", 0)),
+            "oom_kills": int(events.get("oom_kill", 0))}
+
+
 def container_summary(c) -> dict:
     """Short status of one container: state, health, restarts, memory."""
     state = c.attrs["State"]
@@ -117,10 +145,8 @@ def container_summary(c) -> dict:
         info["exit_code"] = state.get("ExitCode")
         return info
 
-    mem = c.stats(stream=False, one_shot=True).get("memory_stats", {})
-    if "usage" in mem:
-        # Same as `docker stats`: page cache that can be freed is not counted.
-        used = mem["usage"] - mem.get("stats", {}).get("inactive_file", 0)
+    used = memory_used_bytes(c.stats(stream=False, one_shot=True).get("memory_stats", {}))
+    if used is not None:
         info["memory_used_mb"] = round(used / 2**20)
         limit = c.attrs["HostConfig"].get("Memory") or 0
         if limit:

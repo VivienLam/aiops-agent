@@ -99,6 +99,16 @@ class Scenario(Strict):
         return self
 
 
+def service_to_restart(scenario: Scenario) -> str | None:
+    """Service that reset.py restarts after the fault: the one the injection touched.
+
+    The bench knows it from the ground truth; the agent never sees this.
+    """
+    if scenario.injection.kind == "docker":
+        return scenario.injection.service
+    return scenario.expected.root_cause_service
+
+
 def check_flag_exists(scenario: Scenario, flags: dict) -> None:
     """The flag and its variant must exist in the demo's flag file (catches typos)."""
     inj = scenario.injection

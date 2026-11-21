@@ -321,6 +321,28 @@ Chaque choix, avec les alternatives et la raison.
 - Recherche de texte dans les logs : « badAddress » (checkout) et « badhost » (cart) ne trouvent rien. Cause trouvée ensuite (lecture seule) : **ces adresses ne sont dans aucun log**, quel que soit le champ. Une recherche sur tous les champs de tous les index renvoie 0. checkout n'écrit aucun log d'erreur quand le paiement échoue (seulement « [PlaceOrder] » en info) : l'erreur « failed to charge card: … » ne part que dans la réponse gRPC, donc dans le span. cart écrit « Wasn't able to connect to redis » (error), sans l'adresse, qui n'est que dans le message de l'exception du span. Ce n'est donc ni le découpage du texte, ni le champ cherché, ni la limite de 1000 logs. Un agent qui ne lit que les logs ne peut pas trouver l'adresse fausse, il lui faut les traces
 - ad redémarré après le test (`docker restart ad`, avec accord) : revenu à 219 Mo sur 300 (73 %), healthy, sans erreur
 
+## Reset : redémarrage du service touché
+- Choix : `reset.py <scénario>` restaure le fichier de flags, puis redémarre le service touché par le scénario (le service de l'injection Docker, sinon root_cause_service), puis attend le repos comme avant. Sans scénario, il ne fait que restaurer les flags. idle et homepage-flood n'ont pas de coupable, donc rien n'est redémarré
+- Alternatives : ne restaurer que les flags (avant), ou redémarrer toute la démo à chaque scénario (environ 5 min de plus et volumes effacés par `make stop`)
+- Raison : certaines pannes laissent un état une fois le flag coupé. adManualGc laisse ad à 98 % de sa mémoire (la JVM garde son tas), et la fuite d'email laisse 28 Mo dans le swap. Redémarrer le seul service touché efface cet état en quelques secondes
+- Le banc connaît ce service grâce à la vérité terrain du scénario. L'agent, lui, ne le connaît pas : rien de ce que fait reset.py ne passe par ses outils, et il ne tourne jamais pendant un reset
+- Conséquence : ad-manual-gc revient dans scenarios/ (eval, leaks_own_name: true)
+- Retesté (21/11, 21:15) : pendant la panne, ad passe de 229 à 296 Mo et son p95 de 5 ms à 4,8 s. Après le reset avec redémarrage, il est à 222 Mo et son p95 à 7 ms. Le redémarrage d'ad provoque quelques erreurs chez le frontend (0,1 %, ad absent environ 10 s), absorbées par la fenêtre de 5 min : repos à 407 s, comme avant
+- Vu pendant ce test : grafana a lu jusqu'à 6,3 Mio/s sur le disque pendant un relevé, juste au-dessus du seuil de 5 Mio/s. Ça n'a pas bloqué le reset (une seule fois), mais si ça devient fréquent, le seuil disque devra lui aussi passer par une référence par service
+
+## Contrôle mémoire au repos : référence par service
+- Filet de sécurité ajouté au contrôle de l'état de départ (bench/idle.py), après l'état laissé par adManualGc, passé inaperçu
+- Alternative écartée : un seuil fixe (par exemple 90 % de la limite). Au repos, kafka est à 98 %, accounting à 93 %, flagd-ui à 89 % et opensearch à 87 %. C'est normal pour du Java, et un seuil fixe les refuserait tous
+- Découverte : atteindre sa limite mémoire est courant au repos. Compteurs `memory.events max` depuis le démarrage (environ 5 h) : valkey-cart 45 195, grafana 24 183, opensearch 5 356, sans aucun processus tué. Plusieurs ont aussi du swap au repos (grafana 48 Mo, flagd-ui 13 Mo, kafka 8 Mo). Un compteur cumulé ne veut donc rien dire seul : il faut un rythme, comparé à une référence
+- Mesure : `scripts/measure_idle_baseline.py` relève toutes les 30 s pendant 30 min la mémoire utilisée, le swap et les atteintes de la limite de chaque conteneur, lus dans ses fichiers cgroup (`/sys/fs/cgroup/system.slice/docker-<id>.scope/`). Il écrit `bench/idle_baseline.json` : maximum et médiane de la mémoire, swap maximal, et pire rythme d'atteinte de la limite sur des fenêtres de 5 min. Il refuse d'écrire si la démo n'est pas au repos au début ou à la fin, ou si un conteneur a redémarré pendant la mesure. À lancer sur une démo démarrée depuis au moins 1 h (la mémoire d'ad monte doucement : 217 Mo juste après un redémarrage, environ 240 Mo après 3 h)
+- Règles, par service :
+  - mémoire : refus au-delà du maximum au repos plus une marge de 10 % de la limite (et au moins 20 Mo). Exemple : ad, référence 240 Mo, seuil 270 Mo, donc les 294 Mo laissés par adManualGc sont refusés
+  - service déjà près de sa limite au repos (référence + marge ≥ limite, comme kafka ou opensearch) : la mémoire ne peut plus monter, donc on regarde le rythme d'atteinte de la limite, mesuré sur les 10 s du relevé disque. Refus au-delà de 3 fois la référence plus 30 par minute
+  - swap : refus au-delà du maximum au repos plus 20 Mo
+  - conteneur absent de la référence : refus
+- Tant que le fichier n'existe pas (avant la première mesure), le contrôle affiche un avertissement et ne vérifie pas la mémoire. Une fois mesuré, le fichier est versionné dans le dépôt
+- Les fichiers cgroup sont lus par une fonction de server.py (`cgroup_memory`), qui servira aussi à get_container_status dans la brique outils
+
 ## Corrections d'outils permises jusqu'au premier passage eval
 - Règle : tant qu'aucun passage n'a eu lieu sur un scénario eval, on peut encore corriger les outils (search_logs, get_container_status…). Une petite brique « outils » est prévue avant tout passage de l'agent sur les scénarios
 - Raison : comme pour le prompt, un outil corrigé après avoir vu les résultats eval serait adapté aux scénarios de mesure, et le chiffre ne vaudrait plus rien. Après le premier passage eval, les outils sont figés pendant la mesure. Une correction indispensable rendrait les passages d'avant et d'après non comparables, et il faudrait tout relancer
