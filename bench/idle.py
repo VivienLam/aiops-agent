@@ -13,7 +13,7 @@ from pathlib import Path
 import docker
 
 from bench.flags import flags_file_modified
-from server import COMPOSE_PROJECT, cgroup_memory, memory_used_bytes, prom_by_service, prom_scalar
+from server import COMPOSE_PROJECT, container_counters, prom_by_service, prom_scalar
 
 EXPECTED_CONTAINERS = 28   # demo + demo/compose.local.yaml, counted on 2026-11-21
 # Prometheus gets span metrics about once a minute, and payment sees ~3 calls/min:
@@ -30,6 +30,7 @@ P95_WINDOW = "5m"          # checkout gets ~3 orders/min: a shorter window gives
 MAX_CHECKOUT_P95_MS = 250  # ~90 ms at rest, 12 s when it lacked memory
 SAMPLE_SECONDS = 10        # disk reads and memory-limit hits are counted over this window
 MAX_DISK_READ_MIB_S = 5.0  # <1 MiB/s at rest, 121 MiB/s when checkout lacked memory
+DISK_REF_FACTOR = 2        # services that read more at rest (grafana, ~5-6 MiB/s) get 2x their max
 
 # Memory, compared with what each service uses at rest (scripts/measure_idle_baseline.py).
 BASELINE_FILE = Path(__file__).resolve().parent / "idle_baseline.json"
@@ -79,6 +80,13 @@ def memory_reasons(c: dict, ref: dict | None) -> list[str]:
     return reasons
 
 
+def disk_threshold(ref: dict | None) -> float:
+    """Fixed 5 MiB/s, or twice what the service reads at rest when that is higher (grafana)."""
+    if ref is None or "disk_read_mib_s_max" not in ref:
+        return MAX_DISK_READ_MIB_S
+    return max(MAX_DISK_READ_MIB_S, DISK_REF_FACTOR * ref["disk_read_mib_s_max"])
+
+
 def judge(snap: Snapshot, baseline: dict | None = None) -> list[str]:
     """Reasons why the demo is NOT at rest. Empty list = at rest.
 
@@ -111,20 +119,10 @@ def judge(snap: Snapshot, baseline: dict | None = None) -> list[str]:
         reasons.append(f"checkout p95 is {p95:.0f} ms (max {MAX_CHECKOUT_P95_MS})")
 
     for name, rate in sorted(snap.disk_read_mib_s.items()):
-        if rate > MAX_DISK_READ_MIB_S:
-            reasons.append(f"container {name} reads {rate:.1f} MiB/s from disk")
+        threshold = disk_threshold((baseline or {}).get(name))
+        if rate > threshold:
+            reasons.append(f"container {name} reads {rate:.1f} MiB/s from disk (max {threshold:.1f})")
     return reasons
-
-
-def counters(container) -> dict:
-    """Cumulative disk reads and memory counters of one running container."""
-    stats = container.stats(stream=False, one_shot=True)
-    rows = stats.get("blkio_stats", {}).get("io_service_bytes_recursive") or []
-    return {
-        "read_bytes": sum(r["value"] for r in rows if r["op"].lower() == "read"),
-        "memory_used": memory_used_bytes(stats.get("memory_stats", {})),
-        "cgroup": cgroup_memory(container.id),
-    }
 
 
 def container_samples(seconds: float = SAMPLE_SECONDS) -> tuple[list[dict], dict[str, float]]:
@@ -137,10 +135,10 @@ def container_samples(seconds: float = SAMPLE_SECONDS) -> tuple[list[dict], dict
         everything = client.containers.list(
             all=True, filters={"label": f"com.docker.compose.project={COMPOSE_PROJECT}"})
         running = [c for c in everything if c.status == "running"]
-        before = {c.name: counters(c) for c in running}
+        before = {c.name: container_counters(c) for c in running}
         start = time.monotonic()
         time.sleep(seconds)
-        after = {c.name: counters(c) for c in running}
+        after = {c.name: container_counters(c) for c in running}
         elapsed = time.monotonic() - start
 
         containers, disk = [], {}

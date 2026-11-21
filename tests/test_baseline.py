@@ -9,16 +9,18 @@ measure = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(measure)
 
 
-def sample(t, used, swap, hits, restarts=0):
+def sample(t, used, swap, hits, restarts=0, disk=0.2):
     return (t, [{"name": "kafka", "state": "running", "memory_limit_mb": 620.0,
                  "memory_used_mb": used, "swap_mb": swap, "limit_hits": hits, "restarts": restarts},
-                {"name": "init", "state": "exited", "restarts": 0}])
+                {"name": "init", "state": "exited", "restarts": 0}],
+            {"kafka": disk})
 
 
 def test_summary():
     # 30 s apart, 11 samples = 5 min. Hits: +10 per sample, then a burst of +100.
     hits = [0, 10, 20, 30, 40, 50, 60, 70, 80, 90, 200]
-    samples = [sample(30.0 * i, 600 + i, 8.0, h) for i, h in enumerate(hits)]
+    samples = [sample(30.0 * i, 600 + i, 8.0, h, disk=6.0 if i == 3 else 0.2)
+               for i, h in enumerate(hits)]
     s = measure.summarize(samples, interval=30)
     assert list(s) == ["kafka"]          # stopped containers are left out
     k = s["kafka"]
@@ -26,6 +28,7 @@ def test_summary():
     assert k["swap_max_mb"] == 8.0
     assert k["limit_hits_per_min_max"] == 40.0   # 200 hits over the 5 min window
     assert k["restarts_during_measure"] == 0
+    assert k["disk_read_mib_s_max"] == 6.0
 
 
 def test_summary_short_run_and_restart():

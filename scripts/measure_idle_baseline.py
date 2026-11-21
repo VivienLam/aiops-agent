@@ -1,4 +1,4 @@
-"""Measure what each demo service uses at rest (memory, swap, memory-limit hits).
+"""Measure what each demo service uses at rest (memory, swap, memory-limit hits, disk reads).
 
 Writes bench/idle_baseline.json, used by the idle check as a safety net.
 Run it on a demo that has been up for a while (ad's JVM keeps growing for ~1 h), e.g.:
@@ -27,16 +27,27 @@ def log(msg: str) -> None:
 
 
 def rest_check() -> list[str]:
-    """Idle check without the memory part (that's what we are measuring)."""
-    return judge(take_snapshot(), baseline=None)
+    """Idle check without the memory part (that's what we are measuring).
+
+    Disk reads are logged but do not block: they are measured here too
+    (grafana reads ~5-6 MiB/s at rest, above the fixed 5 MiB/s threshold).
+    """
+    reasons = judge(take_snapshot(), baseline=None)
+    disk = [r for r in reasons if "from disk" in r]
+    if disk:
+        log(f"disk reads (not blocking): {disk}")
+    return [r for r in reasons if r not in disk]
 
 
-def summarize(samples: list[tuple[float, list[dict]]], interval: int) -> dict:
+def summarize(samples: list[tuple[float, list[dict], dict[str, float]]], interval: int) -> dict:
     per_service: dict[str, list[tuple[float, dict]]] = {}
-    for t, containers in samples:
+    disk: dict[str, list[float]] = {}
+    for t, containers, reads in samples:
         for c in containers:
             if c["state"] == "running":
                 per_service.setdefault(c["name"], []).append((t, c))
+        for name, rate in reads.items():
+            disk.setdefault(name, []).append(rate)
 
     services = {}
     step = max(1, RATE_WINDOW_SECONDS // interval)
@@ -55,6 +66,7 @@ def summarize(samples: list[tuple[float, list[dict]]], interval: int) -> dict:
             "swap_max_mb": round(max(swap), 1) if swap else 0.0,
             "limit_hits_per_min_max": round(max(rates), 1) if rates else 0.0,
             "limit_hits_per_min_mean": round(statistics.mean(rates), 1) if rates else 0.0,
+            "disk_read_mib_s_max": round(max(disk.get(name, [0.0])), 1),
             "restarts_during_measure": rows[-1][1]["restarts"] - rows[0][1]["restarts"],
         }
     return services
@@ -88,8 +100,8 @@ def main() -> int:
     start = time.monotonic()
     while time.monotonic() - start < args.duration:
         t0 = time.monotonic()
-        containers, _ = container_samples(seconds=1)
-        samples.append((time.monotonic(), containers))
+        containers, reads = container_samples(seconds=5)
+        samples.append((time.monotonic(), containers, reads))
         if len(samples) % 10 == 0:
             log(f"{len(samples)} samples")
         time.sleep(max(0.0, args.interval - (time.monotonic() - t0)))

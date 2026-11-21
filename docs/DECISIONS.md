@@ -343,6 +343,20 @@ Chaque choix, avec les alternatives et la raison.
 - Tant que le fichier n'existe pas (avant la première mesure), le contrôle affiche un avertissement et ne vérifie pas la mémoire. Une fois mesuré, le fichier est versionné dans le dépôt
 - Les fichiers cgroup sont lus par une fonction de server.py (`cgroup_memory`), qui servira aussi à get_container_status dans la brique outils
 
+## Lectures disque : référence par service quand elle existe
+- Constat : au repos, grafana manque de mémoire en continu (limite de 500 Mo, 35 à 66 Mo de swap, plusieurs centaines d'atteintes de la limite par minute) et lit 5 à 6 Mio/s sur le disque, juste au-dessus du seuil fixe de 5 Mio/s. Le contrôle de début de la mesure de référence l'aurait refusé, et la référence n'aurait pas été écrite : première mesure arrêtée et relancée
+- Choix : la mesure de référence enregistre aussi les lectures disque maximales par service. Le contrôle au repos prend le plus grand de 5 Mio/s et de 2 fois ce maximum. Pendant la mesure elle-même, les lectures disque sont notées sans bloquer
+- Alternative : monter le seuil fixe pour tout le monde. Écarté : on ne verrait plus un service normalement calme qui se met à lire beaucoup (le cas de checkout, à 121 Mio/s)
+- À surveiller : le swap de grafana monte avec le temps (35 Mo puis 66 Mo en une heure). S'il dépasse sa référence plus 20 Mo, le contrôle refusera alors qu'il s'agit d'une dérive normale de grafana. On verra à l'usage
+
+## Brique outils (avant tout passage de l'agent sur les scénarios)
+- Origine : ces corrections viennent de problèmes vus en testant les injections (eval comprises) **sans l'agent**. Ce sont des corrections génériques, pas des réglages faits pour un scénario
+- search_logs cherche aussi dans `attributes.exception.message`. Avant, l'outil affichait ce champ dans ses résultats mais ne cherchait que dans `body` : un mot visible dans la sortie pouvait être introuvable par la recherche. Ça n'aurait pas suffi pour badAddress et badhost, qui ne sont dans aucun log
+- Écarté : ajouter dans la description de search_logs que le détail d'une erreur est souvent seulement dans les traces. On sait que l'indice aiderait sur deux scénarios eval (payment-unreachable, cart-failure-100) : ce serait régler l'outil sur l'examen
+- get_container_status : relevé de 5 s commun à tous les conteneurs. Quatre champs, affichés seulement s'ils ne sont pas nuls : `swap_mb`, `memory_limit_hits_last_5s` (un rythme, parce qu'au repos les compteurs cumulés vont jusqu'à 45 000), `disk_read_mib_per_s` (à partir de 1 Mio/s) et `oom_kills_since_start` (plus fiable que le drapeau OOMKilled, qui ne parle que du dernier arrêt). Ces signaux comptent dans le tri « problèmes d'abord ». L'outil prend environ 5,5 s au lieu de moins d'une seconde. Les mêmes compteurs servent au contrôle au repos (`container_counters` dans server.py)
+- Conséquence vue tout de suite : au repos, grafana arrive en tête de get_container_status (swap, atteintes de la limite, lectures disque). Ce sont des données vraies, je ne les filtre pas. L'agent devra juger que ce n'est pas la cause d'une panne côté boutique
+- Reste à faire : coupure des erreurs à 400 caractères dans get_trace, vérifiée par une injection courte de cart-failure (pas ce soir, pour ne pas fausser la mesure de référence)
+
 ## Corrections d'outils permises jusqu'au premier passage eval
 - Règle : tant qu'aucun passage n'a eu lieu sur un scénario eval, on peut encore corriger les outils (search_logs, get_container_status…). Une petite brique « outils » est prévue avant tout passage de l'agent sur les scénarios
 - Raison : comme pour le prompt, un outil corrigé après avoir vu les résultats eval serait adapté aux scénarios de mesure, et le chiffre ne vaudrait plus rien. Après le premier passage eval, les outils sont figés pendant la mesure. Une correction indispensable rendrait les passages d'avant et d'après non comparables, et il faudrait tout relancer

@@ -1,6 +1,7 @@
 import math
 import logging
 import re
+import time
 from datetime import datetime, timedelta, timezone
 from urllib.parse import urlsplit
 
@@ -129,8 +130,28 @@ def cgroup_memory(container_id: str) -> dict | None:
             "oom_kills": int(events.get("oom_kill", 0))}
 
 
-def container_summary(c) -> dict:
-    """Short status of one container: state, health, restarts, memory."""
+CONTAINER_SAMPLE_SECONDS = 5   # disk reads and memory-limit hits are counted over this window
+MIN_DISK_READ_MIB_S = 1.0      # below this, disk reads are not shown
+
+
+def container_counters(c) -> dict:
+    """Cumulative counters of one running container: disk reads, memory used, cgroup memory."""
+    stats = c.stats(stream=False, one_shot=True)
+    rows = stats.get("blkio_stats", {}).get("io_service_bytes_recursive") or []
+    return {
+        "read_bytes": sum(r["value"] for r in rows if r["op"].lower() == "read"),
+        "memory_used": memory_used_bytes(stats.get("memory_stats", {})),
+        "cgroup": cgroup_memory(c.id),
+    }
+
+
+def container_summary(c, before: dict | None = None, after: dict | None = None,
+                      elapsed: float = CONTAINER_SAMPLE_SECONDS) -> dict:
+    """Short status of one container: state, health, restarts, memory.
+
+    before/after: container_counters() taken `elapsed` seconds apart (running containers).
+    Swap, memory-limit hits, disk reads and OOM kills are only shown when not zero.
+    """
     state = c.attrs["State"]
     info = {
         "service": c.labels.get("com.docker.compose.service", c.name),
@@ -144,8 +165,10 @@ def container_summary(c) -> dict:
     if state["Status"] != "running":
         info["exit_code"] = state.get("ExitCode")
         return info
+    if before is None or after is None:
+        return info
 
-    used = memory_used_bytes(c.stats(stream=False, one_shot=True).get("memory_stats", {}))
+    used = after["memory_used"]
     if used is not None:
         info["memory_used_mb"] = round(used / 2**20)
         limit = c.attrs["HostConfig"].get("Memory") or 0
@@ -154,14 +177,31 @@ def container_summary(c) -> dict:
             info["memory_used_percent"] = round(100 * used / limit, 1)
         else:
             info["memory_limit_mb"] = None
+
+    cg_before, cg_after = before["cgroup"], after["cgroup"]
+    if cg_after:
+        swap_mb = round(cg_after["swap_bytes"] / 2**20)
+        if swap_mb:
+            info["swap_mb"] = swap_mb
+        if cg_after["oom_kills"]:
+            info["oom_kills_since_start"] = cg_after["oom_kills"]
+        if cg_before:
+            hits = cg_after["limit_hits"] - cg_before["limit_hits"]
+            if hits > 0:
+                info["memory_limit_hits_last_5s"] = hits
+    read = (after["read_bytes"] - before["read_bytes"]) / elapsed / 2**20
+    if read >= MIN_DISK_READ_MIB_S:
+        info["disk_read_mib_per_s"] = round(read, 1)
     return info
 
 
 def problem_score(info: dict) -> tuple:
-    """Sort key: broken containers first, then high memory, then restarts."""
+    """Sort key: broken containers first, then memory pressure, then disk reads, then restarts."""
     broken = (info["state"] != "running" or info.get("health") == "unhealthy"
-              or info.get("oom_killed", False))
-    return (not broken, -info.get("memory_used_percent", 0), -info["restarts"])
+              or info.get("oom_killed", False) or info.get("oom_kills_since_start", 0) > 0)
+    hits = info.get("memory_limit_hits_last_5s", 0)
+    return (not broken, -hits, -info.get("memory_used_percent", 0),
+            -info.get("disk_read_mib_per_s", 0), -info["restarts"])
 
 
 @mcp.tool()
@@ -170,6 +210,9 @@ def get_container_status(service: str | None = None) -> dict:
 
     Give a service name (e.g. "cart", "kafka") for one container, or nothing for all of them,
     problems first. Useful to spot crashes, restart loops or memory pressure.
+    Measured over 5 seconds. Only shown when not zero: swap_mb (memory pushed to swap),
+    memory_limit_hits_last_5s (times memory reached the limit), disk_read_mib_per_s
+    (from 1 MiB/s) and oom_kills_since_start (processes killed for lack of memory).
     """
     filters = {"label": f"com.docker.compose.project={COMPOSE_PROJECT}"}
     if service is not None:
@@ -180,7 +223,15 @@ def get_container_status(service: str | None = None) -> dict:
     client = docker.from_env()
     try:
         containers = client.containers.list(all=True, filters=filters)
-        infos = [container_summary(c) for c in containers]
+        running = [c for c in containers if c.status == "running"]
+        before = {c.id: container_counters(c) for c in running}
+        start = time.monotonic()
+        if running:
+            time.sleep(CONTAINER_SAMPLE_SECONDS)
+        after = {c.id: container_counters(c) for c in running}
+        elapsed = time.monotonic() - start
+        infos = [container_summary(c, before.get(c.id), after.get(c.id), elapsed)
+                 for c in containers]
     finally:
         client.close()
 
@@ -237,7 +288,9 @@ def search_logs(service: str | None = None, min_severity: str | None = None,
     if text is not None:
         if not LOG_SEARCH_TEXT.match(text):
             return {"error": "invalid text: letters, digits, spaces and . , : ; / @ ' \" ( ) = - only, max 100"}
-        filters.append({"match": {"body": {"query": text, "operator": "and"}}})
+        # Same fields as the ones shown in the output: the message and the exception detail.
+        filters.append({"multi_match": {"query": text, "operator": "and",
+                                        "fields": ["body", "attributes.exception.message"]}})
 
     body = {
         "size": LOG_MAX_SCANNED,

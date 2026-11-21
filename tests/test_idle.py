@@ -142,6 +142,15 @@ def test_unknown_container_and_unreadable_cgroup():
     assert judge(snap, baseline_for_all()) == []
 
 
+def test_disk_threshold_uses_reference():
+    b = baseline_for_all()
+    b["c0"] = dict(b["c0"], disk_read_mib_s_max=6.0)   # like grafana at rest
+    snap = with_memory()
+    snap.disk_read_mib_s = {"c0": 9.0, "c1": 6.0}
+    # c0 may read up to 12 MiB/s, c1 keeps the fixed 5 MiB/s
+    assert judge(snap, b) == ["container c1 reads 6.0 MiB/s from disk (max 5.0)"]
+
+
 def test_all_reasons_are_listed():
     snap = at_rest(error_percent={"payment": 50.0}, checkout_p95_ms=500.0, flags_file_modified=True)
     assert len(judge(snap)) == 3
