@@ -1,0 +1,20 @@
+id: email-memory-leak-1000x
+description: email garde chaque message en mémoire, avec un corps 1000 fois plus gros
+lot: eval                # panne de ressource : se voit dans l'état des conteneurs, pas dans les erreurs
+
+injection:
+  kind: flag
+  flag: emailMemoryLeak
+  variant: 1000x
+
+wait_seconds: 240        # à 300 s, la mémoire était déjà repartie dans le swap (voir DECISIONS.md)
+
+expected:
+  status: incident
+  root_cause_service: email
+  fault_type: resource_limit
+  repair:
+    action: escalate
+    target: email
+
+leaks_own_name: false

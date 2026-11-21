@@ -1,0 +1,22 @@
+id: catalog-lock-contention
+description: product-catalog verrouille sa table en base 30 s toutes les 10 s
+lot: eval                # piège : accuser la base (astronomy-db) au lieu de product-catalog
+
+injection:
+  kind: flag
+  flag: productCatalogLockContention
+  variant: "on"
+
+wait_seconds: 240
+
+expected:
+  status: incident
+  root_cause_service: product-catalog
+  fault_type: latency
+  repair:
+    action: escalate
+    target: product-catalog
+
+# Pas le nom du flag dans les logs, mais « lock contention scenario active: holding ACCESS
+# EXCLUSIVE lock on catalog.products » décrit la panne en clair.
+leaks_own_name: false

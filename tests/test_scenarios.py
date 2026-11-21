@@ -77,10 +77,27 @@ def test_docker_injection_is_accepted(tmp_path):
     changed(wait_seconds=-1),
     changed(extra_field=1),                                           # typo in a field name
     changed(expected__status="no_incident"),                          # fault_type must be null
+    changed(expected__fault_type_also_accepted=["disk_full"]),
+    changed(expected__fault_type_also_accepted=["application_error"]),  # same as the main one
+    changed(expected__fault_type_also_accepted=["latency", "latency"]),
+    changed(expected__fault_type_also_accepted=[None]),
 ])
 def test_invalid_scenarios_are_refused(tmp_path, data):
     with pytest.raises(ValueError):
         load_scenario(write(tmp_path, data, name=data["id"]), FLAGS)
+
+
+def test_fault_type_also_accepted(tmp_path):
+    assert load_scenario(write(tmp_path, PAYMENT), FLAGS).expected.fault_type_also_accepted == []
+    data = changed(expected__fault_type="bad_config",
+                   expected__fault_type_also_accepted=["application_error"])
+    s = load_scenario(write(tmp_path, data), FLAGS)
+    assert s.expected.fault_type_also_accepted == ["application_error"]
+    idle = changed(injection={"kind": "none"},
+                   expected={"status": "no_incident", "root_cause_service": None, "fault_type": None,
+                             "fault_type_also_accepted": ["latency"], "repair": {"action": "none"}})
+    with pytest.raises(ValueError):
+        load_scenario(write(tmp_path, idle), FLAGS)
 
 
 def test_id_must_match_file_name(tmp_path):

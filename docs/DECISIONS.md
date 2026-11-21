@@ -282,5 +282,46 @@ Chaque choix, avec les alternatives et la raison.
 - Anciens journaux : ceux de runs/ écrits avant ce champ ne l'ont pas, et je ne les modifie pas. Le futur noteur (brique 5) devra accepter qu'il manque, et l'interface Streamlit ne l'affiche que s'il est présent
 - Conséquence : le schéma du rapport change, donc les passages d'avant et d'après ne sont pas tout à fait comparables sur ce point
 
+## Les 10 scénarios de l'étape 3
+- Règles : seulement des flags (les injections Docker viennent à l'étape 5), plusieurs services et plusieurs types de panne, au moins 2 cas où la bonne réponse est « ne rien faire », au plus 2 pannes qui écrivent leur nom dans les logs, environ 4 en tuning et 6 en eval
+- Tuning : idle, payment-failure-50, intl-shipping-slowdown-5s (déjà vus pendant le développement), ad-failure (très proche de paymentFailure, utile pour régler mais peu informatif pour mesurer)
+- Eval, en choisissant les cas où un agent qui devine se trompe :
+  - payment-unreachable : les symptômes parlent de payment, mais c'est checkout qui appelle une mauvaise adresse. Test « symptôme ou cause »
+  - cart-failure-100 : panne discrète, checkout ignore l'erreur et les commandes réussissent. Seule une petite part des appels à cart échoue
+  - catalog-lock-contention : piège pour accuser la base (astronomy-db), alors que c'est product-catalog qui pose le verrou
+  - email-memory-leak-1000x : panne de ressource, visible dans l'état des conteneurs plutôt que dans les erreurs
+  - homepage-flood : le trafic explose mais rien n'est cassé. On mesure si l'agent sait se retenir (deuxième cas « ne rien faire », avec idle)
+  - ad-manual-gc : écrit son nom dans les logs, compté à part. **Écarté après le test des injections** (voir plus bas) : il reste 9 scénarios, 5 en eval, en attendant un remplaçant
+- Écartés : aiRunawayAgent et aiSlowResponse (le service LLM de la démo ne tourne pas sans `make start-agentic`) ; failedReadinessProbe (pas de healthcheck compose sur cart, ça ne sert que sous Kubernetes) ; cartMetricCardinalityOverflow et emitRawPii (aucun effet visible par nos outils, ce n'est pas une panne) ; productCatalogFailure (passe par une règle de ciblage qu'inject.py ne sait pas modifier, et écrit son nom) ; recommendationCacheFailure (le cache n'est jamais vidé, donc reset.py ne remet pas la démo au repos : à revoir avec les actions Docker) ; kafkaConsumerDead et kafkaQueueProblems (écrivent leur nom, et sans ce texte nos outils ne voient presque rien) ; adHighCpu (ad n'a pas de limite CPU, la charge ralentirait toute la machine et la vérité terrain serait floue) ; imageSlowLoad (ne touche que les rares utilisateurs « navigateur » de Locust)
+- intlShippingSlowdown ajouté à la liste des flags qui écrivent leur nom : son log « Delaying international shipment due to intlShippingSlowdown feature flag » existe, même si search_logs ne le montre pas aujourd'hui (logs de shipping datés de 1970). Si le filtre de dates change un jour, il deviendra visible
+- catalog-lock-contention reste à leaks_own_name: false, avec une note : le log « lock contention scenario active » ne contient pas le nom du flag, mais il décrit la panne en clair
+
+## Vérité terrain : fault_type_also_accepted
+- Champ optionnel `expected.fault_type_also_accepted`, une liste prise dans la même liste fermée que fault_type. Vide par défaut, interdit hors incident, et sans répéter le fault_type principal
+- Raison : pour cart-failure-100 et payment-unreachable, bad_config et application_error se défendent tous les deux. Une adresse fausse codée en dur, c'est une mauvaise config du point de vue des symptômes, mais c'est aussi un bug dans le code. Les deux scénarios ont bad_config en principal et application_error en accepté
+- Alternative : choisir une seule étiquette et compter l'autre comme fausse. Écarté : le score dépendrait d'un choix de vocabulaire, pas de la qualité du diagnostic
+- Important : ce choix est fait AVANT tout passage de l'agent sur ces scénarios. Il n'est pas réglé d'après ses réponses (même règle que dans « Scénarios de mise au point et scénarios de mesure »)
+
+## Test des injections, sans agent (21/11, 18:57 à 20:32)
+- Pour chaque scénario : contrôle au repos, inject.py, une mesure par minute pendant l'attente (list_services, get_service_health, get_container_status et search_logs, appelés directement), reset.py, puis une mesure après le reset. Tous les reset ont ramené au repos en 406-407 s
+
+| Scénario | Effet visible au bout de l'attente | Après reset |
+|---|---|---|
+| intl-shipping-slowdown-5s | p95 de checkout à 8 s (contre 140 ms). Le p95 de shipping reste à 7 ms : les envois internationaux sont noyés parmi les devis rapides. Il faut les traces pour voir que shipping est en cause | repos |
+| ad-failure | ad à 9,9 % d'erreurs, frontend à 0,6 %. Visible dans les métriques seulement à partir d'environ 180 s, mais dès 60 s dans les logs (« GetAds Failed with status UNAVAILABLE ») | repos |
+| payment-unreachable | checkout à 100 % d'erreurs, et le trafic de payment tombe à 0 (plus aucun appel ne lui arrive) | repos |
+| cart-failure-100 | cart à 2,5 % d'erreurs, et le p95 de checkout passe à 4,8 s : EmptyCart attend l'adresse fausse avant d'échouer. La panne est moins discrète que prévu : les commandes réussissent, mais elles sont lentes. Description du scénario corrigée | repos |
+| catalog-lock-contention | product-catalog avec un p95 de 15 s et 8,6 % d'erreurs, frontend à 4,7 %, et **recommendation à 40 % d'erreurs** (il appelle le catalogue). Le service qui a le plus d'erreurs n'est pas le coupable : le piège est encore plus fort que prévu | repos |
+| homepage-flood | trafic du frontend de 13 à 33 requêtes/s, toujours en hausse à 240 s. 0 % d'erreurs, p95 stable (39-46 ms). La machine tient la charge, donc « no_incident » est confirmé | repos |
+| email-memory-leak-1000x | mémoire d'email de 58 à 91 Mo sur 100 à 240 s, puis **redescendue à 60 Mo à 300 s**, avec un p95 qui passe de 24 à 168 ms | repos (48 Mo), le scénario est gardé |
+| ad-manual-gc | p95 de ad de 3 ms à 4,7 s, et le nom du flag en clair dans les logs (warn) | **pas au repos : ad reste à 98 % de sa mémoire** |
+
+- email : la limite a été atteinte 292 fois (`memory.events max`), sans aucun processus tué (`oom_kill 0`, aucun redémarrage). Le noyau a mis de la mémoire dans le swap, donc la mémoire affichée par get_container_status redescend alors que la fuite continue. Seule la latence trahit le swap. Attente ramenée à 240 s, au moment où la mémoire est à 91 %. Après le reset, email nettoie ses messages accumulés au prochain envoi (code de la démo) et revient à 48 Mo
+- ad-manual-gc écarté : ad était à environ 240 Mo sur 300 avant, et il est toujours à 294 Mo (98 %) 25 min après le reset. La JVM garde le tas pris pendant la panne. C'est le même problème que recommendationCacheFailure : la panne laisse un état que reset.py n'efface pas, et un passage suivant (même idle) verrait ad presque plein. Le fichier est rangé dans scenarios/excluded/ (non chargé). À reprendre à l'étape 5 avec un redémarrage du conteneur dans le reset
+- Recherche de texte dans les logs : « badAddress » (checkout) et « badhost » (cart) ne trouvent rien, alors que ces adresses sont dans les erreurs. À vérifier avant de lancer l'agent : le message est peut-être découpé autrement par OpenSearch, ou seulement présent dans les traces
+
 ## Points ouverts
+- Le contrôle au repos ne regarde pas la mémoire des conteneurs. C'est comme ça que l'état laissé par adManualGc est passé inaperçu. Idée : refuser si un conteneur dépasse 90 % de sa limite (au repos, le plus haut est ad, à environ 80 %)
+- get_container_status ne voit pas le swap : un service qui manque de mémoire peut avoir l'air d'aller mieux (cas d'email, de 91 à 60 Mo). Idée : ajouter le nombre de fois où la limite a été atteinte (`memory.events max`) ou l'usage du swap
+- Nos outils ne voient pas le retard des consommateurs Kafka (consumer lag, nombre de membres d'un groupe). Sans ça, kafkaConsumerDead et kafkaQueueProblems ne se diagnostiquent qu'en lisant le nom du flag dans les logs. Idée pour plus tard : un outil qui lit le lag par groupe (métriques Kafka dans Prometheus, ou l'API admin de Kafka)
 - Brique 4 : évaluer une charge plus forte avec Locust (le générateur de charge de la démo). Avec environ 3 paiements par minute, il faut attendre 240 s après l'injection et environ 7 min après le reset, et une alerte calculée sur si peu de requêtes risque d'être instable. Plus de trafic rendrait l'attente, le reset et les alertes plus fiables et plus courts

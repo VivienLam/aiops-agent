@@ -1,0 +1,21 @@
+id: payment-unreachable
+description: checkout appelle une mauvaise adresse pour le paiement, payment lui-même est sain
+lot: eval                # piège : les symptômes parlent de payment, la cause est dans checkout
+
+injection:
+  kind: flag
+  flag: paymentUnreachable
+  variant: "on"
+
+wait_seconds: 240
+
+expected:
+  status: incident
+  root_cause_service: checkout
+  fault_type: bad_config
+  fault_type_also_accepted: [application_error]   # adresse fausse codée en dur = bug aussi
+  repair:
+    action: escalate
+    target: checkout
+
+leaks_own_name: false

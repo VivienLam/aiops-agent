@@ -1,0 +1,22 @@
+id: intl-shipping-slowdown-5s
+description: Les envois internationaux prennent 5 s de plus dans shipping
+lot: tuning              # déjà vu pendant le développement (test de get_trace)
+
+injection:
+  kind: flag
+  flag: intlShippingSlowdown
+  variant: 5sec
+
+wait_seconds: 240
+
+expected:
+  status: incident
+  root_cause_service: shipping
+  fault_type: latency
+  repair:
+    action: escalate
+    target: shipping
+
+# Le log « Delaying international shipment due to intlShippingSlowdown feature flag » existe,
+# mais il est daté de 1970 comme tous les logs de shipping, donc search_logs ne le montre pas.
+leaks_own_name: true

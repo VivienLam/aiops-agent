@@ -1,0 +1,20 @@
+id: ad-failure
+description: Une requête sur dix au service de pub échoue (UNAVAILABLE)
+lot: tuning              # proche de payment-failure-50, utile pour la mise au point
+
+injection:
+  kind: flag
+  flag: adFailure
+  variant: "on"
+
+wait_seconds: 240
+
+expected:
+  status: incident
+  root_cause_service: ad
+  fault_type: application_error
+  repair:
+    action: escalate
+    target: ad
+
+leaks_own_name: false

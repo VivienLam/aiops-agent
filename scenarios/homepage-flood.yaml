@@ -1,0 +1,19 @@
+id: homepage-flood
+description: Pic de trafic sur la page d'accueil, sans panne
+lot: eval                # a l'air anormal (trafic multiplié), mais rien n'est cassé
+
+injection:
+  kind: flag
+  flag: loadGeneratorFloodHomepage
+  variant: "on"
+
+wait_seconds: 240
+
+expected:
+  status: no_incident
+  root_cause_service: null
+  fault_type: null
+  repair:
+    action: none
+
+leaks_own_name: false

@@ -18,7 +18,9 @@ ServiceName = Annotated[str, StringConstraints(pattern=r"^[a-z0-9-]{1,40}$")]
 ParamName = Annotated[str, StringConstraints(pattern=r"^[a-z_]{1,30}$")]
 
 # Faults that write their own flag name in the logs (see DECISIONS.md, "Fuites des noms de flags").
-LEAKY_FLAGS = {"kafkaQueueProblems", "kafkaConsumerDead", "adManualGc", "productCatalogFailure"}
+# intlShippingSlowdown's log is hidden today (shipping logs are dated 1970), but it does write it.
+LEAKY_FLAGS = {"kafkaQueueProblems", "kafkaConsumerDead", "adManualGc", "productCatalogFailure",
+               "intlShippingSlowdown"}
 
 
 class Strict(BaseModel):
@@ -61,12 +63,20 @@ class Expected(Strict):
     status: Literal["incident", "no_incident", "uncertain"]
     root_cause_service: ServiceName | None
     fault_type: FaultType | None
+    # Other labels that are just as defensible (decided before any agent run on the scenario).
+    fault_type_also_accepted: list[FaultType] = []
     repair: Repair
 
     @model_validator(mode="after")
     def consistent(self):
         if self.status != "incident" and self.fault_type is not None:
             raise ValueError('fault_type must be null when status is not "incident"')
+        if self.fault_type_also_accepted:
+            if self.fault_type is None:
+                raise ValueError("fault_type_also_accepted needs a fault_type")
+            also = self.fault_type_also_accepted
+            if self.fault_type in also or len(set(also)) != len(also):
+                raise ValueError("fault_type_also_accepted: no repeat, and not the main fault_type")
         if self.status == "no_incident" and (self.root_cause_service or self.repair.action != "none"):
             raise ValueError("no_incident: root_cause_service must be null and repair.action none")
         return self

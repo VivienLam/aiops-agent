@@ -1,0 +1,21 @@
+id: cart-failure-100
+description: cart vide les paniers via un stockage à une adresse fausse ; les commandes réussissent mais checkout ralentit
+lot: eval                # panne discrète : checkout ignore l'erreur, peu d'appels touchés
+
+injection:
+  kind: flag
+  flag: cartFailure
+  variant: 100%
+
+wait_seconds: 240
+
+expected:
+  status: incident
+  root_cause_service: cart
+  fault_type: bad_config
+  fault_type_also_accepted: [application_error]   # adresse fausse codée en dur = bug aussi
+  repair:
+    action: escalate
+    target: cart
+
+leaks_own_name: false
