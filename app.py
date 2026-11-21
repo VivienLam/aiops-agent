@@ -112,6 +112,10 @@ def show_report(data: dict) -> None:
         st.code(ev["quote"], language=None, wrap_lines=True)
 
     st.markdown(f"**Proposed action**  \n{report['proposed_action']}")
+    repair = report.get("proposed_repair")  # absent from logs written before this field
+    if repair:
+        target = f" → {repair['target']}" if repair.get("target") else ""
+        st.markdown(f"**Proposed repair**  \n`{repair['action']}`{target}")
     st.markdown(f"**Missing info**  \n{report['missing_info']}")
 
 

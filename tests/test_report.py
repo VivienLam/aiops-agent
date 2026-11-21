@@ -4,6 +4,7 @@ import json
 import pytest
 from pydantic import ValidationError
 
+import agent.report as agent_report
 from agent.report import Report, check_evidence, check_root_cause
 
 CALLS = [
@@ -34,6 +35,7 @@ def report(**overrides) -> Report:
             {"step": 9, "quote": "12 matching logs"},
         ],
         "proposed_action": "Check the SMTP server.",
+        "proposed_repair": {"action": "escalate", "target": "email"},
         "missing_info": "None.",
     }
     data.update(overrides)
@@ -51,13 +53,56 @@ def test_compacted_json_with_wrong_value_fails():
     assert check_evidence(r, CALLS)["verified"] == 0
 
 
+NO_REPAIR = {"action": "none"}
+
+
 def test_no_incident_has_no_fault_type():
-    r = report(status="no_incident", fault_type=None, root_cause_service=None)
+    r = report(status="no_incident", fault_type=None, root_cause_service=None,
+               proposed_repair=NO_REPAIR)
     assert r.fault_type is None
     with pytest.raises(ValidationError):
-        report(status="no_incident", fault_type="unknown")
+        report(status="no_incident", fault_type="unknown", proposed_repair=NO_REPAIR)
     with pytest.raises(ValidationError):
-        report(status="uncertain", fault_type="latency")
+        report(status="uncertain", fault_type="latency", proposed_repair=NO_REPAIR)
+
+
+def test_repair_only_for_incidents():
+    assert report(status="uncertain", fault_type=None,
+                  proposed_repair=NO_REPAIR).proposed_repair.target is None
+    for status in ("no_incident", "uncertain"):
+        with pytest.raises(ValidationError, match="none"):
+            report(status=status, fault_type=None)  # still escalate -> email
+
+
+@pytest.mark.parametrize("repair", [
+    {"action": "escalate"},                          # target missing
+    {"action": "none", "target": "email"},           # target with nothing to do
+    {"action": "disable_flag", "target": "email"},   # not in the list
+    {"action": "fix it", "target": "email"},
+])
+def test_invalid_repair(repair):
+    with pytest.raises(ValidationError):
+        report(proposed_repair=repair)
+
+
+def test_repair_is_required():
+    data = report().model_dump()
+    del data["proposed_repair"]
+    with pytest.raises(ValidationError):
+        Report.model_validate(data)
+
+
+def test_no_flag_wording_in_what_the_model_reads():
+    """The model must never learn that faults are simulated with feature flags."""
+    from agent.graph import REPORT_REQUEST, SYSTEM_PROMPT
+    schema = json.dumps(Report.model_json_schema()).lower()
+    for text in (schema, REPORT_REQUEST.lower(), SYSTEM_PROMPT.lower()):
+        assert "flag" not in text
+
+
+def test_scenarios_use_the_same_repair_list():
+    import bench.scenarios
+    assert bench.scenarios.RepairAction is agent_report.RepairAction
 
 
 def test_error_count_null_is_not_zero():

@@ -11,6 +11,36 @@ FaultType = Literal[
 ]
 
 
+# Same list as the expected repair of the scenarios (bench/scenarios.py imports it).
+RepairAction = Literal[
+    "none", "escalate", "rollback_deployment", "restore_config",
+    "raise_memory_limit", "restart_container",
+]
+
+REPAIR_ACTION_HELP = (
+    "none: nothing to do (no incident, or not enough evidence to act). "
+    "escalate: bug in the service's code, alert the team that owns the service. "
+    "rollback_deployment: a recent deployment of the service broke it, roll it back. "
+    "restore_config: a configuration change broke the service, restore the previous configuration. "
+    "raise_memory_limit: the service runs out of memory under its limit, raise the limit. "
+    "restart_container: the service's container is stuck or crashed, restart it."
+)
+
+
+class ProposedRepair(BaseModel):
+    action: RepairAction = Field(description=REPAIR_ACTION_HELP)
+    target: str | None = Field(
+        None, description='Service the action applies to. null when action is "none"')
+
+    @model_validator(mode="after")
+    def target_matches_action(self):
+        if self.action == "none" and self.target is not None:
+            raise ValueError('target must be null when action is "none"')
+        if self.action != "none" and not self.target:
+            raise ValueError(f"target is required for action {self.action!r}")
+        return self
+
+
 class Impact(BaseModel):
     """Measured impact. Numbers only; null when not observed."""
 
@@ -41,12 +71,20 @@ class Report(BaseModel):
     confidence: float = Field(ge=0, le=1)
     evidence: list[Evidence] = Field(description="Facts from tool outputs that support the report")
     proposed_action: str = Field(description="What an operator should do next")
+    proposed_repair: ProposedRepair = Field(
+        description='The repair, from a fixed list. action must be "none" unless status is "incident"')
     missing_info: str = Field(description="What would be needed to conclude with more certainty")
 
     @model_validator(mode="after")
     def fault_type_only_for_incidents(self):
         if self.status != "incident" and self.fault_type is not None:
             raise ValueError('fault_type must be null when status is not "incident"')
+        return self
+
+    @model_validator(mode="after")
+    def repair_only_for_incidents(self):
+        if self.status != "incident" and self.proposed_repair.action != "none":
+            raise ValueError('proposed_repair.action must be "none" when status is not "incident"')
         return self
 
 

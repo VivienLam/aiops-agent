@@ -7,7 +7,7 @@ from typing import Annotated, Literal
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints, model_validator
 
-from agent.report import FaultType
+from agent.report import FaultType, RepairAction
 
 SCENARIO_DIR = Path(__file__).resolve().parent.parent / "scenarios"
 
@@ -19,12 +19,6 @@ ParamName = Annotated[str, StringConstraints(pattern=r"^[a-z_]{1,30}$")]
 
 # Faults that write their own flag name in the logs (see DECISIONS.md, "Fuites des noms de flags").
 LEAKY_FLAGS = {"kafkaQueueProblems", "kafkaConsumerDead", "adManualGc", "productCatalogFailure"}
-
-# Must stay identical to the action field of the agent's report (see DECISIONS.md).
-RepairAction = Literal[
-    "none", "escalate", "rollback_deployment", "restore_config",
-    "raise_memory_limit", "restart_container",
-]
 
 
 class Strict(BaseModel):
