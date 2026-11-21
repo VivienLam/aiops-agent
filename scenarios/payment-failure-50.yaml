@@ -1,0 +1,20 @@
+id: payment-failure-50
+description: Le service de paiement refuse environ la moitié des paiements
+lot: tuning              # tuning | eval
+
+injection:
+  kind: flag             # none | flag | docker
+  flag: paymentFailure
+  variant: "50%"
+
+wait_seconds: 240        # attente après injection, avant de lancer l'agent (120 s ne suffisaient pas)
+
+expected:
+  status: incident       # incident | no_incident | uncertain
+  root_cause_service: payment
+  fault_type: application_error
+  repair:
+    action: escalate     # bug dans le code : on prévient l'équipe de payment
+    target: payment
+
+leaks_own_name: false

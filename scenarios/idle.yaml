@@ -1,0 +1,17 @@
+id: idle
+description: Démo au repos, aucune panne
+lot: tuning
+
+injection:
+  kind: none
+
+wait_seconds: 0
+
+expected:
+  status: no_incident
+  root_cause_service: null
+  fault_type: null
+  repair:
+    action: none
+
+leaks_own_name: false

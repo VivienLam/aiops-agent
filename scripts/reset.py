@@ -1,0 +1,52 @@
+"""Turn every fault off (git restore of the flag file), then wait until the demo is at rest.
+
+Usage: uv run python scripts/reset.py [--timeout SECONDS]
+Exit code 0 once at rest, 1 if still not at rest after the timeout.
+"""
+
+import argparse
+import sys
+import time
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from bench.flags import restore_flags  # noqa: E402
+from bench.idle import SETTLE_SECONDS, check_idle, summary  # noqa: E402
+
+POLL_SECONDS = 20
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--timeout", type=int, default=600)
+    args = parser.parse_args()
+
+    restore_flags()
+    print("Flag file restored, all flags back to their original value.")
+
+    # Errors from before the reset can still arrive, and the error window still covers
+    # the time the fault was on: "at rest" only counts once the window is all after the reset.
+    print(f"At rest no sooner than {SETTLE_SECONDS} s from now.")
+    start = time.monotonic()
+    while True:
+        reasons, snap = check_idle()
+        waited = time.monotonic() - start
+        print(f"[{waited:4.0f} s] {summary(snap)}")
+        if not reasons and waited >= SETTLE_SECONDS:
+            print(f"At rest after {waited:.0f} s.")
+            return 0
+        if not reasons:
+            print(f"  looks at rest, waiting until {SETTLE_SECONDS} s")
+        if waited > args.timeout:
+            print(f"Still NOT at rest after {args.timeout} s:")
+            for r in reasons:
+                print(f"  - {r}")
+            return 1
+        if reasons:
+            print("  waiting: " + "; ".join(reasons))
+        time.sleep(POLL_SECONDS)
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -19,6 +19,7 @@ dependencies = [
     { name = "langgraph" },
     { name = "mcp", extra = ["cli"] },
     { name = "python-dotenv" },
+    { name = "pyyaml" },
     { name = "streamlit" },
 ]
 
@@ -37,6 +38,7 @@ requires-dist = [
     { name = "langgraph", specifier = ">=1.2.20" },
     { name = "mcp", extras = ["cli"], specifier = ">=2.3.0" },
     { name = "python-dotenv", specifier = ">=1.2.4" },
+    { name = "pyyaml", specifier = ">=6.0.3" },
     { name = "streamlit", specifier = ">=1.67.0" },
 ]
 
