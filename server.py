@@ -32,6 +32,7 @@ TRACE_MAX_MINUTES = 60
 TRACE_MAX_TREE_LINES = 40
 TRACE_MIN_SHOWN_FRACTION = 0.05  # off-path spans shorter than 5% of the trace are hidden
 TRACE_MAX_ATTR_CHARS = 200
+TRACE_MAX_ERROR_CHARS = 400  # get_trace; find_traces cuts errors to TRACE_MAX_ATTR_CHARS
 TRACE_OVERRUN_MIN_FRACTION = 0.05  # child ending later than this past its parent: flagged
 TRACE_ID = re.compile(r"^[0-9a-f]{16,32}$")
 STATUS_ERROR = 2  # OTLP status code
@@ -413,7 +414,7 @@ def parse_spans(otlp: dict) -> dict[str, list[dict]]:
                         if ev.get("name") == "exception":
                             ev_attrs = {a["key"]: otlp_value(a["value"]) for a in ev.get("attributes", [])}
                             error = ev_attrs.get("exception.message") or error
-                    error = cut(error) if error else NO_MESSAGE
+                    error = cut(error, TRACE_MAX_ERROR_CHARS) if error else NO_MESSAGE
                 traces.setdefault(sp["traceId"], []).append({
                     "id": sp["spanId"],
                     "parent": sp.get("parentSpanId") or None,
@@ -488,7 +489,7 @@ def find_traces(service: str, minutes: int = 15, only_errors: bool = False,
             "spans": len(spans),
             "services": sorted({s["service"] for s in spans}),
             # Spans with a real message first, then the ones without.
-            "errors": [f'{s["service"]} → {s["name"]}: {s["error"]}'
+            "errors": [f'{s["service"]} → {s["name"]}: {cut(s["error"])}'
                        for s in sorted((s for s in spans if s["error"]),
                                        key=lambda s: s["error"] == NO_MESSAGE)][:5],
         })

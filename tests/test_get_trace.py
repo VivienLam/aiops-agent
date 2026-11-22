@@ -105,6 +105,25 @@ def test_calls_to_different_targets_are_not_merged(monkeypatch):
     assert "ERR" not in shipping
 
 
+def test_error_messages_cut_at_400_chars_in_get_trace(monkeypatch):
+    """The useful detail (a bad address) can sit past 200 chars of the message."""
+    message = "x" * 350 + " badhost:1234 " + "y" * 86  # 450 chars
+    fake = otlp({"cart": [span("e1", None, "EmptyCart", 0, 100, error=message)]})
+
+    class Resp(FakeResponse):
+        def json(self):
+            return fake
+
+    monkeypatch.setattr(server.httpx, "get", lambda *a, **k: Resp())
+    tree = server.get_trace(TRACE_ID)["tree"]
+    assert "badhost:1234" in tree, tree
+    assert "x" * 350 + " badhost:1234 " + "y" * 36 + "..." in tree
+    assert "y" * 37 not in tree
+    # find_traces keeps its shorter cut (up to 50 error lines in one output)
+    found = server.find_traces("cart")["traces"][0]["errors"][0]
+    assert found == "cart → EmptyCart: " + "x" * 200 + "..."
+
+
 def test_small_overlap_does_not_drop_the_long_call():
     """Real case: the next calls start 0.2 ms before PlaceOrder ends. Walking back
     from the end, PlaceOrder must stay on the critical path, not be seen as parallel."""
