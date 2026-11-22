@@ -8,12 +8,13 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from bench.idle import check_idle, summary  # noqa: E402
+from bench.idle import check_idle, print_warnings, summary  # noqa: E402
 
 
 def main() -> int:
-    reasons, snap = check_idle()
+    reasons, warnings, snap = check_idle()
     print(summary(snap))
+    print_warnings(warnings)
     if reasons:
         print("NOT at rest:")
         for r in reasons:

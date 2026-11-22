@@ -12,7 +12,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from bench.flags import evaluate_flag, load_flags, set_flag  # noqa: E402
-from bench.idle import check_idle, summary  # noqa: E402
+from bench.idle import check_idle, print_warnings, summary  # noqa: E402
 from bench.scenarios import find_scenario, load_scenario  # noqa: E402
 
 FLAGD_RELOAD_TIMEOUT = 30
@@ -37,8 +37,9 @@ def main() -> int:
     scenario = load_scenario(find_scenario(args.scenario), load_flags())
     print(f"Scenario {scenario.id} ({scenario.lot}): {scenario.description}")
 
-    reasons, snap = check_idle()
+    reasons, warnings, snap = check_idle()
     print(f"Start state: {summary(snap)}")
+    print_warnings(warnings)
     if reasons:
         print("Refused, the demo is NOT at rest:")
         for r in reasons:

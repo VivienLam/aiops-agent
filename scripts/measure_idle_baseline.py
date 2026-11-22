@@ -32,7 +32,7 @@ def rest_check() -> list[str]:
     Disk reads are logged but do not block: they are measured here too
     (grafana reads ~5-6 MiB/s at rest, above the fixed 5 MiB/s threshold).
     """
-    reasons = judge(take_snapshot(), baseline=None)
+    reasons, _ = judge(take_snapshot(), baseline=None)  # no baseline: no warnings
     disk = [r for r in reasons if "from disk" in r]
     if disk:
         log(f"disk reads (not blocking): {disk}")

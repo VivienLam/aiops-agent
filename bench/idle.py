@@ -52,20 +52,25 @@ class Snapshot:
     flags_file_modified: bool = False
 
 
-def memory_reasons(c: dict, ref: dict | None) -> list[str]:
-    """Memory of one running container against its reference at rest."""
+def memory_checks(c: dict, ref: dict | None) -> tuple[list[str], list[str]]:
+    """Memory of one running container against its reference at rest.
+
+    Returns (reasons, warnings). Memory used and swap are only warnings: they drift on a
+    long bench, and what a fault leaves behind is cleared by reset.py restarting the
+    service. Hitting the limit much more often than at rest still blocks.
+    """
     name = c["name"]
     if ref is None:
-        return [f"container {name} has no memory reference at rest"]
-    reasons = []
+        return [], [f"container {name} has no memory reference at rest"]
+    reasons, warnings = [], []
     limit = c.get("memory_limit_mb") or ref["memory_limit_mb"]
     margin = max(MEMORY_MARGIN_FRACTION * limit, MEMORY_MARGIN_MIN_MB)
     used = c.get("memory_used_mb")
     if ref["memory_max_mb"] + margin < limit:
         threshold = ref["memory_max_mb"] + margin
         if used is not None and used > threshold:
-            reasons.append(f"container {name} uses {used:.0f} MB "
-                           f"(max {threshold:.0f}, {ref['memory_max_mb']:.0f} at rest)")
+            warnings.append(f"container {name} uses {used:.0f} MB "
+                            f"(max {threshold:.0f}, {ref['memory_max_mb']:.0f} at rest)")
     else:
         # Already near its limit at rest: memory can't grow, watch how often it hits the limit.
         hits = c.get("limit_hits_per_min")
@@ -75,9 +80,9 @@ def memory_reasons(c: dict, ref: dict | None) -> list[str]:
                            f"(max {threshold:.0f})")
     swap = c.get("swap_mb")
     if swap is not None and swap > ref["swap_max_mb"] + SWAP_MARGIN_MB:
-        reasons.append(f"container {name} has {swap:.0f} MB in swap "
-                       f"(max {ref['swap_max_mb'] + SWAP_MARGIN_MB:.0f})")
-    return reasons
+        warnings.append(f"container {name} has {swap:.0f} MB in swap "
+                        f"(max {ref['swap_max_mb'] + SWAP_MARGIN_MB:.0f})")
+    return reasons, warnings
 
 
 def disk_threshold(ref: dict | None) -> float:
@@ -87,12 +92,13 @@ def disk_threshold(ref: dict | None) -> float:
     return max(MAX_DISK_READ_MIB_S, DISK_REF_FACTOR * ref["disk_read_mib_s_max"])
 
 
-def judge(snap: Snapshot, baseline: dict | None = None) -> list[str]:
-    """Reasons why the demo is NOT at rest. Empty list = at rest.
+def judge(snap: Snapshot, baseline: dict | None = None) -> tuple[list[str], list[str]]:
+    """(reasons, warnings). reasons: why the demo is NOT at rest, empty = at rest.
+    warnings: shown and kept with the run, they do not block (memory used, swap).
 
     baseline: the "services" part of idle_baseline.json, None to skip the memory checks.
     """
-    reasons = []
+    reasons, warnings = [], []
     if snap.flags_file_modified:
         reasons.append("flag file modified (a fault may still be on): run scripts/reset.py")
 
@@ -106,7 +112,9 @@ def judge(snap: Snapshot, baseline: dict | None = None) -> list[str]:
         if c.get("oom_killed"):
             reasons.append(f"container {c['name']} was killed for lack of memory")
         if baseline is not None and c["state"] == "running":
-            reasons += memory_reasons(c, baseline.get(c["name"]))
+            r, w = memory_checks(c, baseline.get(c["name"]))
+            reasons += r
+            warnings += w
 
     for service, pct in sorted(snap.error_percent.items()):
         if pct > MAX_ERROR_PERCENT:
@@ -122,7 +130,7 @@ def judge(snap: Snapshot, baseline: dict | None = None) -> list[str]:
         threshold = disk_threshold((baseline or {}).get(name))
         if rate > threshold:
             reasons.append(f"container {name} reads {rate:.1f} MiB/s from disk (max {threshold:.1f})")
-    return reasons
+    return reasons, warnings
 
 
 def container_samples(seconds: float = SAMPLE_SECONDS) -> tuple[list[dict], dict[str, float]]:
@@ -197,17 +205,25 @@ def load_baseline() -> dict | None:
 _warned = False
 
 
-def check_idle() -> tuple[list[str], Snapshot]:
+def check_idle() -> tuple[list[str], list[str], Snapshot]:
+    """(reasons, warnings, snapshot). The bench keeps the warnings in the run's log."""
     snap = take_snapshot()
     baseline = load_baseline()
-    reasons = judge(snap, baseline)
+    reasons, warnings = judge(snap, baseline)
     global _warned
     if baseline is None and not _warned:
         # Only before the first measurement; the file is then kept in the repo.
         _warned = True
         print(f"warning: no memory reference at rest ({BASELINE_FILE.name}), memory not checked. "
               "Run scripts/measure_idle_baseline.py", file=sys.stderr)
-    return reasons, snap
+    return reasons, warnings, snap
+
+
+def print_warnings(warnings: list[str]) -> None:
+    if warnings:
+        print("Warnings (not blocking):")
+        for w in warnings:
+            print(f"  - {w}")
 
 
 def summary(snap: Snapshot) -> str:

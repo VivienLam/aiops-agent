@@ -1,6 +1,16 @@
 """Idle-state check: the decision part only, on made-up snapshots. No demo needed."""
 
-from bench.idle import ERROR_WINDOW, EXPECTED_CONTAINERS, Snapshot, judge
+from bench.idle import ERROR_WINDOW, EXPECTED_CONTAINERS, Snapshot
+from bench.idle import judge as judge_both
+
+
+def judge(snap, baseline=None) -> list[str]:
+    """Blocking reasons only."""
+    return judge_both(snap, baseline)[0]
+
+
+def warnings(snap, baseline=None) -> list[str]:
+    return judge_both(snap, baseline)[1]
 
 
 def at_rest(**changes) -> Snapshot:
@@ -103,43 +113,47 @@ def baseline_for_all() -> dict:
 
 
 def test_memory_at_rest():
-    assert judge(with_memory(), baseline_for_all()) == []
+    assert judge_both(with_memory(), baseline_for_all()) == ([], [])
 
 
 def test_memory_skipped_without_baseline():
-    assert judge(with_memory(ad={"memory_used_mb": 299})) == []
+    assert judge_both(with_memory(ad={"memory_used_mb": 299})) == ([], [])
 
 
-def test_memory_kept_after_a_fault():
-    """ad after adManualGc: 294 MB, its reference is 240."""
-    reasons = judge(with_memory(ad={"memory_used_mb": 294}), baseline_for_all())
-    assert reasons == ["container ad uses 294 MB (max 270, 240 at rest)"]
+def test_memory_kept_after_a_fault_only_warns():
+    """ad after adManualGc: 294 MB, its reference is 240. reset.py restarts ad, and memory
+    drifts on a long bench: a warning, not a refusal."""
+    snap = with_memory(ad={"memory_used_mb": 294})
+    assert judge(snap, baseline_for_all()) == []
+    assert warnings(snap, baseline_for_all()) == ["container ad uses 294 MB (max 270, 240 at rest)"]
 
 
 def test_small_service_uses_min_margin():
-    assert judge(with_memory(email={"memory_used_mb": 77}), baseline_for_all()) == []
-    assert "email uses 91 MB" in judge(with_memory(email={"memory_used_mb": 91}), baseline_for_all())[0]
+    assert warnings(with_memory(email={"memory_used_mb": 77}), baseline_for_all()) == []
+    assert "email uses 91 MB" in warnings(with_memory(email={"memory_used_mb": 91}), baseline_for_all())[0]
 
 
 def test_service_at_limit_uses_hit_rate():
-    # kafka at 619/620 MB is normal; hitting the limit 120 times/min is not
-    assert judge(with_memory(kafka={"memory_used_mb": 619}), baseline_for_all()) == []
-    reasons = judge(with_memory(kafka={"limit_hits_per_min": 120}), baseline_for_all())
+    # kafka at 619/620 MB is normal; hitting the limit 120 times/min is not, and blocks
+    assert judge_both(with_memory(kafka={"memory_used_mb": 619}), baseline_for_all()) == ([], [])
+    reasons, warns = judge_both(with_memory(kafka={"limit_hits_per_min": 120}), baseline_for_all())
     assert reasons == ["container kafka hits its memory limit 120 times/min (max 105)"]
+    assert warns == []
 
 
-def test_swap_left_after_a_fault():
-    reasons = judge(with_memory(email={"swap_mb": 28}), baseline_for_all())
-    assert reasons == ["container email has 28 MB in swap (max 20)"]
+def test_swap_only_warns():
+    snap = with_memory(email={"swap_mb": 28})
+    assert judge(snap, baseline_for_all()) == []
+    assert warnings(snap, baseline_for_all()) == ["container email has 28 MB in swap (max 20)"]
 
 
 def test_unknown_container_and_unreadable_cgroup():
     b = baseline_for_all()
     del b["c0"]
-    assert judge(with_memory(), b) == ["container c0 has no memory reference at rest"]
+    assert judge_both(with_memory(), b) == ([], ["container c0 has no memory reference at rest"])
     # cgroup files not readable: swap and hit rate are None, no crash, nothing flagged
     snap = with_memory(kafka={"swap_mb": None, "limit_hits_per_min": None})
-    assert judge(snap, baseline_for_all()) == []
+    assert judge_both(snap, baseline_for_all()) == ([], [])
 
 
 def test_disk_threshold_uses_reference():
@@ -149,6 +163,14 @@ def test_disk_threshold_uses_reference():
     snap.disk_read_mib_s = {"c0": 9.0, "c1": 6.0}
     # c0 may read up to 12 MiB/s, c1 keeps the fixed 5 MiB/s
     assert judge(snap, b) == ["container c1 reads 6.0 MiB/s from disk (max 5.0)"]
+
+
+def test_warnings_do_not_hide_blocking_reasons():
+    snap = with_memory(ad={"memory_used_mb": 294}, email={"swap_mb": 28})
+    snap.error_percent = {"payment": 50.0}
+    reasons, warns = judge_both(snap, baseline_for_all())
+    assert reasons == [f"payment: 50.0% errors over {ERROR_WINDOW}"]
+    assert len(warns) == 2
 
 
 def test_all_reasons_are_listed():

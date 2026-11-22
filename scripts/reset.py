@@ -15,7 +15,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from bench.demo import restart_service  # noqa: E402
 from bench.flags import load_flags, restore_flags  # noqa: E402
-from bench.idle import SETTLE_SECONDS, check_idle, summary  # noqa: E402
+from bench.idle import SETTLE_SECONDS, check_idle, print_warnings, summary  # noqa: E402
 from bench.scenarios import find_scenario, load_scenario, service_to_restart  # noqa: E402
 
 POLL_SECONDS = 20
@@ -42,11 +42,12 @@ def main() -> int:
     print(f"At rest no sooner than {SETTLE_SECONDS} s from now.")
     start = time.monotonic()
     while True:
-        reasons, snap = check_idle()
+        reasons, warnings, snap = check_idle()
         waited = time.monotonic() - start
         print(f"[{waited:4.0f} s] {summary(snap)}")
         if not reasons and waited >= SETTLE_SECONDS:
             print(f"At rest after {waited:.0f} s.")
+            print_warnings(warnings)
             return 0
         if not reasons:
             print(f"  looks at rest, waiting until {SETTLE_SECONDS} s")
