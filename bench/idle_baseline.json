@@ -1,0 +1,289 @@
+{
+  "measured_at": "2026-11-21T22:04:45+00:00",
+  "demo_version": "3.1.0-203-g7a07d9fc",
+  "duration_seconds": 1800,
+  "interval_seconds": 30,
+  "samples": 60,
+  "services": {
+    "accounting": {
+      "memory_limit_mb": 160.0,
+      "memory_max_mb": 139.7,
+      "memory_median_mb": 139.3,
+      "swap_max_mb": 0.0,
+      "limit_hits_per_min_max": 0.4,
+      "limit_hits_per_min_mean": 0.1,
+      "disk_read_mib_s_max": 0.0,
+      "restarts_during_measure": 0
+    },
+    "ad": {
+      "memory_limit_mb": 300.0,
+      "memory_max_mb": 242.9,
+      "memory_median_mb": 239.4,
+      "swap_max_mb": 0.0,
+      "limit_hits_per_min_max": 0.0,
+      "limit_hits_per_min_mean": 0.0,
+      "disk_read_mib_s_max": 0.0,
+      "restarts_during_measure": 0
+    },
+    "astronomy-db": {
+      "memory_limit_mb": 80.0,
+      "memory_max_mb": 69.4,
+      "memory_median_mb": 64.7,
+      "swap_max_mb": 2.8,
+      "limit_hits_per_min_max": 3.6,
+      "limit_hits_per_min_mean": 0.6,
+      "disk_read_mib_s_max": 0.0,
+      "restarts_during_measure": 0
+    },
+    "cart": {
+      "memory_limit_mb": 160.0,
+      "memory_max_mb": 61.0,
+      "memory_median_mb": 60.2,
+      "swap_max_mb": 0.0,
+      "limit_hits_per_min_max": 0.0,
+      "limit_hits_per_min_mean": 0.0,
+      "disk_read_mib_s_max": 0.0,
+      "restarts_during_measure": 0
+    },
+    "checkout": {
+      "memory_limit_mb": 100.0,
+      "memory_max_mb": 19.2,
+      "memory_median_mb": 15.1,
+      "swap_max_mb": 0.0,
+      "limit_hits_per_min_max": 0.0,
+      "limit_hits_per_min_mean": 0.0,
+      "disk_read_mib_s_max": 0.0,
+      "restarts_during_measure": 0
+    },
+    "currency": {
+      "memory_limit_mb": 20.0,
+      "memory_max_mb": 6.1,
+      "memory_median_mb": 4.3,
+      "swap_max_mb": 0.0,
+      "limit_hits_per_min_max": 0.2,
+      "limit_hits_per_min_mean": 0.0,
+      "disk_read_mib_s_max": 0.0,
+      "restarts_during_measure": 0
+    },
+    "email": {
+      "memory_limit_mb": 100.0,
+      "memory_max_mb": 65.6,
+      "memory_median_mb": 57.9,
+      "swap_max_mb": 0.0,
+      "limit_hits_per_min_max": 0.0,
+      "limit_hits_per_min_mean": 0.0,
+      "disk_read_mib_s_max": 0.0,
+      "restarts_during_measure": 0
+    },
+    "flagd": {
+      "memory_limit_mb": 75.0,
+      "memory_max_mb": 56.5,
+      "memory_median_mb": 54.3,
+      "swap_max_mb": 0.0,
+      "limit_hits_per_min_max": 0.0,
+      "limit_hits_per_min_mean": 0.0,
+      "disk_read_mib_s_max": 0.0,
+      "restarts_during_measure": 0
+    },
+    "flagd-ui": {
+      "memory_limit_mb": 200.0,
+      "memory_max_mb": 179.2,
+      "memory_median_mb": 175.7,
+      "swap_max_mb": 0.0,
+      "limit_hits_per_min_max": 0.0,
+      "limit_hits_per_min_mean": 0.0,
+      "disk_read_mib_s_max": 0.0,
+      "restarts_during_measure": 0
+    },
+    "fraud-detection": {
+      "memory_limit_mb": 300.0,
+      "memory_max_mb": 236.2,
+      "memory_median_mb": 234.9,
+      "swap_max_mb": 0.0,
+      "limit_hits_per_min_max": 0.0,
+      "limit_hits_per_min_mean": 0.0,
+      "disk_read_mib_s_max": 0.0,
+      "restarts_during_measure": 0
+    },
+    "frontend": {
+      "memory_limit_mb": 250.0,
+      "memory_max_mb": 123.9,
+      "memory_median_mb": 122.2,
+      "swap_max_mb": 0.0,
+      "limit_hits_per_min_max": 0.0,
+      "limit_hits_per_min_mean": 0.0,
+      "disk_read_mib_s_max": 0.0,
+      "restarts_during_measure": 0
+    },
+    "frontend-proxy": {
+      "memory_limit_mb": 90.0,
+      "memory_max_mb": 35.3,
+      "memory_median_mb": 34.1,
+      "swap_max_mb": 0.0,
+      "limit_hits_per_min_max": 0.0,
+      "limit_hits_per_min_mean": 0.0,
+      "disk_read_mib_s_max": 0.0,
+      "restarts_during_measure": 0
+    },
+    "grafana": {
+      "memory_limit_mb": 500.0,
+      "memory_max_mb": 365.9,
+      "memory_median_mb": 361.2,
+      "swap_max_mb": 66.2,
+      "limit_hits_per_min_max": 12.6,
+      "limit_hits_per_min_mean": 3.7,
+      "disk_read_mib_s_max": 1.5,
+      "restarts_during_measure": 0
+    },
+    "image-provider": {
+      "memory_limit_mb": 120.0,
+      "memory_max_mb": 10.9,
+      "memory_median_mb": 7.0,
+      "swap_max_mb": 0.0,
+      "limit_hits_per_min_max": 0.0,
+      "limit_hits_per_min_mean": 0.0,
+      "disk_read_mib_s_max": 0.0,
+      "restarts_during_measure": 0
+    },
+    "jaeger": {
+      "memory_limit_mb": 1200.0,
+      "memory_max_mb": 375.2,
+      "memory_median_mb": 373.7,
+      "swap_max_mb": 0.0,
+      "limit_hits_per_min_max": 0.0,
+      "limit_hits_per_min_mean": 0.0,
+      "disk_read_mib_s_max": 0.0,
+      "restarts_during_measure": 0
+    },
+    "kafka": {
+      "memory_limit_mb": 620.0,
+      "memory_max_mb": 583.7,
+      "memory_median_mb": 582.6,
+      "swap_max_mb": 0.0,
+      "limit_hits_per_min_max": 14.0,
+      "limit_hits_per_min_mean": 3.6,
+      "disk_read_mib_s_max": 0.0,
+      "restarts_during_measure": 0
+    },
+    "load-generator": {
+      "memory_limit_mb": 1500.0,
+      "memory_max_mb": 684.2,
+      "memory_median_mb": 556.3,
+      "swap_max_mb": 0.0,
+      "limit_hits_per_min_max": 0.0,
+      "limit_hits_per_min_mean": 0.0,
+      "disk_read_mib_s_max": 0.0,
+      "restarts_during_measure": 0
+    },
+    "opamp-server": {
+      "memory_limit_mb": 65.0,
+      "memory_max_mb": 13.8,
+      "memory_median_mb": 12.9,
+      "swap_max_mb": 0.0,
+      "limit_hits_per_min_max": 0.0,
+      "limit_hits_per_min_mean": 0.0,
+      "disk_read_mib_s_max": 0.0,
+      "restarts_during_measure": 0
+    },
+    "opensearch": {
+      "memory_limit_mb": 1024.0,
+      "memory_max_mb": 903.2,
+      "memory_median_mb": 882.7,
+      "swap_max_mb": 0.0,
+      "limit_hits_per_min_max": 233.0,
+      "limit_hits_per_min_mean": 51.1,
+      "disk_read_mib_s_max": 2.1,
+      "restarts_during_measure": 0
+    },
+    "otel-collector": {
+      "memory_limit_mb": 400.0,
+      "memory_max_mb": 121.1,
+      "memory_median_mb": 112.0,
+      "swap_max_mb": 0.0,
+      "limit_hits_per_min_max": 0.0,
+      "limit_hits_per_min_mean": 0.0,
+      "disk_read_mib_s_max": 0.0,
+      "restarts_during_measure": 0
+    },
+    "payment": {
+      "memory_limit_mb": 140.0,
+      "memory_max_mb": 93.5,
+      "memory_median_mb": 59.7,
+      "swap_max_mb": 0.0,
+      "limit_hits_per_min_max": 0.0,
+      "limit_hits_per_min_mean": 0.0,
+      "disk_read_mib_s_max": 0.0,
+      "restarts_during_measure": 0
+    },
+    "product-catalog": {
+      "memory_limit_mb": 100.0,
+      "memory_max_mb": 21.9,
+      "memory_median_mb": 15.5,
+      "swap_max_mb": 0.0,
+      "limit_hits_per_min_max": 0.0,
+      "limit_hits_per_min_mean": 0.0,
+      "disk_read_mib_s_max": 0.0,
+      "restarts_during_measure": 0
+    },
+    "prometheus": {
+      "memory_limit_mb": 200.0,
+      "memory_max_mb": 75.8,
+      "memory_median_mb": 72.2,
+      "swap_max_mb": 0.0,
+      "limit_hits_per_min_max": 0.0,
+      "limit_hits_per_min_mean": 0.0,
+      "disk_read_mib_s_max": 0.0,
+      "restarts_during_measure": 0
+    },
+    "quote": {
+      "memory_limit_mb": 40.0,
+      "memory_max_mb": 27.6,
+      "memory_median_mb": 21.1,
+      "swap_max_mb": 7.3,
+      "limit_hits_per_min_max": 20.6,
+      "limit_hits_per_min_mean": 2.9,
+      "disk_read_mib_s_max": 0.5,
+      "restarts_during_measure": 0
+    },
+    "recommendation": {
+      "memory_limit_mb": 500.0,
+      "memory_max_mb": 234.5,
+      "memory_median_mb": 228.8,
+      "swap_max_mb": 0.0,
+      "limit_hits_per_min_max": 0.0,
+      "limit_hits_per_min_mean": 0.0,
+      "disk_read_mib_s_max": 0.0,
+      "restarts_during_measure": 0
+    },
+    "shipping": {
+      "memory_limit_mb": 20.0,
+      "memory_max_mb": 14.7,
+      "memory_median_mb": 10.3,
+      "swap_max_mb": 0.0,
+      "limit_hits_per_min_max": 5.8,
+      "limit_hits_per_min_mean": 0.7,
+      "disk_read_mib_s_max": 0.0,
+      "restarts_during_measure": 0
+    },
+    "telemetry-docs": {
+      "memory_limit_mb": 100.0,
+      "memory_max_mb": 11.4,
+      "memory_median_mb": 7.0,
+      "swap_max_mb": 0.0,
+      "limit_hits_per_min_max": 0.0,
+      "limit_hits_per_min_mean": 0.0,
+      "disk_read_mib_s_max": 0.0,
+      "restarts_during_measure": 0
+    },
+    "valkey-cart": {
+      "memory_limit_mb": 20.0,
+      "memory_max_mb": 7.0,
+      "memory_median_mb": 6.4,
+      "swap_max_mb": 0.0,
+      "limit_hits_per_min_max": 0.0,
+      "limit_hits_per_min_mean": 0.0,
+      "disk_read_mib_s_max": 0.0,
+      "restarts_during_measure": 0
+    }
+  }
+}
